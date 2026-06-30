@@ -22,7 +22,6 @@ class DatabaseManager:
                 gaze_away_limit INTEGER DEFAULT 20
             )
         ''')
-        # Handle migrations for existing DB safely without dropping
         try:
             c.execute("ALTER TABLE users ADD COLUMN stand_requirement INTEGER DEFAULT 180")
         except sqlite3.OperationalError:
@@ -44,15 +43,15 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def create_profile(self, name, embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, gaze_away_limit=20):
+    def create_profile(self, user_name, face_embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, gaze_away_limit=20):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (name, embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit))
+                  (user_name, face_embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit))
         conn.commit()
         conn.close()
 
-    def read_profiles(self):
+    def load_all_profiles(self):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit FROM users")
@@ -73,22 +72,22 @@ class DatabaseManager:
             }
         return profiles
 
-    def update_profile(self, name, slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit):
+    def update_profile(self, user_name, slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("UPDATE users SET slouch_sensitivity = ?, session_limit = ?, stand_requirement = ?, gaze_away_limit = ? WHERE user_name = ?", 
-                  (slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit, name))
+                  (slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit, user_name))
         conn.commit()
         conn.close()
 
-    def delete_profile(self, name):
+    def delete_profile(self, user_name):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("DELETE FROM users WHERE user_name = ?", (name,))
+        c.execute("DELETE FROM users WHERE user_name = ?", (user_name,))
         conn.commit()
         conn.close()
         
-    def log_metric(self, user_name, event_type, duration):
+    def log_session_metrics(self, user_name, event_type, duration):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT INTO metrics (user_name, event_type, duration) VALUES (?, ?, ?)", 

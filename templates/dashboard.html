@@ -12,9 +12,9 @@
         h1 { font-size: 2.2rem; font-weight: 300; letter-spacing: 1.5px; margin: 0; }
         
         .glass-card {
-            background: rgba(16, 20, 38, 0.75);
+            background: rgba(18, 22, 40, 0.75);
             backdrop-filter: blur(15px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 16px;
             padding: 2rem;
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
@@ -98,7 +98,7 @@
             if (!state) return "⏸️";
             if (state.includes("Active") || state.includes("Tracking Active")) return "🧘";
             if (state.includes("Looking Away") || state.includes("Ocular Break")) return "👀";
-            if (state.includes("Standing Mode")) return "🧍";
+            if (state.includes("Standing")) return "🧍";
             if (state.includes("Session Limit Reached")) return "🚨";
             if (state.includes("Posture Deficit Alert")) return "⚠️";
             if (state.includes("Calibrating")) return "⚙️";
@@ -120,8 +120,15 @@
                 }
                 
                 targets.forEach(t => {
-                    let sitPct = Math.min(100, (t.sitting_time / t.session_limit) * 100);
-                    let standPct = Math.min(100, (t.standing_time / t.stand_requirement) * 100);
+                    let sittingTime = t.sitting_time !== undefined ? Math.round(t.sitting_time) : 0;
+                    let standingTime = t.standing_time !== undefined ? Math.round(t.standing_time) : 0;
+                    let headPitch = t.pitch !== undefined ? Math.round(t.pitch) : 0;
+                    let sessionLimit = t.session_limit !== undefined ? Math.round(t.session_limit) : 1200;
+                    let standRequirement = t.stand_requirement !== undefined ? Math.round(t.stand_requirement) : 180;
+                    let gazeAwayTime = t.gaze_away_time !== undefined ? Math.round(t.gaze_away_time) : 0;
+                    
+                    let sitPct = Math.min(100, (sittingTime / sessionLimit) * 100);
+                    let standPct = Math.min(100, (standingTime / standRequirement) * 100);
                     
                     const isWarning = t.state && (t.state.includes("Alert") || t.state.includes("Ocular"));
                     const isCritical = t.state && t.state.includes("Session Limit");
@@ -149,8 +156,8 @@
                         
                         <div style="margin-top: 1.5rem;">
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                                <span>Sitting Limit Tracker</span>
-                                <span>${(t.sitting_time || 0).toFixed(0)}s / ${t.session_limit}s</span>
+                                <span>Continuous Sitting Limit Cap</span>
+                                <span>${sittingTime}s / ${sessionLimit}s</span>
                             </div>
                             <div class="progress-container">
                                 <div class="progress-bar ${sitPct > 90 ? 'danger' : ''}" style="width: ${sitPct}%;"></div>
@@ -159,8 +166,8 @@
                         
                         <div style="margin-top: 1rem;">
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                                <span>Mandatory Standing Counter</span>
-                                <span>${(t.standing_time || 0).toFixed(0)}s / ${t.stand_requirement}s</span>
+                                <span>Mandatory Stand Duration Requirement</span>
+                                <span>${standingTime}s / ${standRequirement}s</span>
                             </div>
                             <div class="progress-container">
                                 <div class="progress-bar success" style="width: ${standPct}%;"></div>
@@ -170,11 +177,11 @@
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
                             <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                 <div class="metric-label">Head Pitch</div>
-                                <div class="metric-val">${(t.pitch || 0).toFixed(1)}°</div>
+                                <div class="metric-val">${headPitch}°</div>
                             </div>
                             <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                 <div class="metric-label">Gaze Away</div>
-                                <div class="metric-val">${(t.gaze_away_time || 0).toFixed(1)}s</div>
+                                <div class="metric-val">${gazeAwayTime}s</div>
                             </div>
                         </div>
                     `;
@@ -191,7 +198,15 @@
                 const profiles = await res.json();
                 
                 const container = document.getElementById('profiles-container');
-                let html = '<table><tr><th>Name</th><th>Slouch Sensitivity (°)</th><th>Max Sitting Cap (s)</th><th>Required Stand (s)</th><th>Look-Away Limit (s)</th><th>Actions</th></tr>';
+                let html = `<table>
+                    <tr>
+                        <th>Name</th>
+                        <th>3D Posture Tolerance Edge</th>
+                        <th>Continuous Sitting Cap (Seconds)</th>
+                        <th>Required Stand Duration (Seconds)</th>
+                        <th>Look-Away Limit (s)</th>
+                        <th>Actions</th>
+                    </tr>`;
                 
                 profiles.forEach(p => {
                     html += `
@@ -272,7 +287,7 @@
         }
 
         setInterval(refreshLiveTelemetry, 1000);
-        setInterval(pollProfiles, 3000);
+        setInterval(pollProfiles, 4000);
         
         refreshLiveTelemetry();
         pollProfiles();

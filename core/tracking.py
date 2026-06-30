@@ -32,13 +32,14 @@ class Target:
         self.gaze_away_limit = 20
         self.biometric_cutoff = 0.35
         
-        # Calibration State
         self.baseline_pitch = 0.0
-        self.baseline_shoulder_y = 0.0
-        self.calibration_timer = 0.0
+        self.baseline_shoulder_ratio = 0.0
         self.calibration_start = 0.0
         self.calibration_pitch_samples = []
         self.calibration_shoulder_samples = []
+        
+        self.smoothed_pitch = None
+        self.smoothed_ratio = None
 
     def get_centroid(self):
         return ((self.box[0] + self.box[2])/2, (self.box[1] + self.box[3])/2)
@@ -48,13 +49,13 @@ class TrackerEngine:
         self.targets = {}
         self.track_counter = 0
         self.db_manager = db_manager
-        self.profiles = self.db_manager.read_profiles()
+        self.profiles = self.db_manager.load_all_profiles()
         self.mutex = threading.Lock()
         self.inference_engine = inference_engine
 
     def sync_profiles(self):
         with self.mutex:
-            self.profiles = self.db_manager.read_profiles()
+            self.profiles = self.db_manager.load_all_profiles()
             for target in self.targets.values():
                 if target.name in self.profiles:
                     p = self.profiles[target.name]
@@ -76,17 +77,44 @@ class TrackerEngine:
         return best_match
 
     def update(self, frame, detections, frame_shape):
+        return self.process_frame_mot(frame, detections, frame_shape)
+
+    def process_frame_mot(self, frame, detections, frame_shape):
         current_time = time.time()
         h, w = frame_shape[:2]
         active_ids = set()
         
+        # Primary User Selection Gate:
+        # Rank valid skeletons based on proximity score combining maximum shoulder width
+        # (closest to the camera) and minimum horizontal distance to center of the frame screen.
+        ranked_detections = []
+        for det in detections:
+            box = det["box"]
+            shoulders = det["shoulders"]
+            centroid_x = (box[0] + box[2]) / 2.0
+            shoulder_width = np.abs(shoulders[1][0] - shoulders[0][0])
+            
+            # Combine max shoulder width (near camera) and min distance to centerline
+            score = (shoulder_width / w) - (np.abs(centroid_x - w/2) / w)
+            ranked_detections.append((score, det))
+            
+        # Sort descending by proximity score
+        ranked_detections.sort(key=lambda x: x[0], reverse=True)
+        
         with self.mutex:
-            for det in detections:
+            primary_det = None
+            if ranked_detections:
+                primary_det = ranked_detections[0][1]
+                
+            for score, det in ranked_detections:
                 embedding = det["embedding"]
                 box = det["box"]
                 shoulders = det["shoulders"]
+                nose = det["nose"]
                 det_centroid = ((box[0]+box[2])/2, (box[1]+box[3])/2)
-                shoulder_width = np.linalg.norm(np.array(shoulders[0]) - np.array(shoulders[1]))
+                shoulder_width = np.abs(shoulders[1][0] - shoulders[0][0])
+                
+                is_primary = (det is primary_det)
                 
                 matched_target = None
                 best_cost = float('inf')
@@ -94,7 +122,7 @@ class TrackerEngine:
                 for tid, target in self.targets.items():
                     tc = target.get_centroid()
                     centroid_dist = np.linalg.norm(np.array(det_centroid) - np.array(tc))
-                    scale_aware_dist = centroid_dist / (shoulder_width + 1e-5)
+                    scale_aware_dist = centroid_dist / (shoulder_width + 1e-6)
                     emb_dist = np.linalg.norm(embedding - target.embedding)
                     
                     cost = (scale_aware_dist * 0.5) + (emb_dist * 0.5)
@@ -106,7 +134,39 @@ class TrackerEngine:
                     track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_counter}"
                     self.track_counter += 1
                     matched_target = Target(track_hash, embedding, box)
-                    
+                    self.targets[track_hash] = matched_target
+
+                dt = current_time - matched_target.last_update
+                matched_target.last_seen = current_time
+                matched_target.last_update = current_time
+                matched_target.box = box
+                active_ids.add(matched_target.track_id)
+                
+                matched_target.pitch = det["pitch"]
+                matched_target.yaw = det["yaw"]
+                matched_target.roll = det["roll"]
+                
+                shoulder_y = (shoulders[0][1] + shoulders[1][1]) / 2.0
+                nose_y = nose[1]
+                current_ratio = (shoulder_y - nose_y) / (shoulder_width + 1e-6)
+                
+                if matched_target.smoothed_pitch is None:
+                    matched_target.smoothed_pitch = det["pitch"]
+                    matched_target.smoothed_ratio = current_ratio
+                else:
+                    alpha = 0.15
+                    matched_target.smoothed_pitch = (1 - alpha) * matched_target.smoothed_pitch + alpha * det["pitch"]
+                    matched_target.smoothed_ratio = (1 - alpha) * matched_target.smoothed_ratio + alpha * current_ratio
+                
+                if not is_primary:
+                    # Secondary background tracks or walking targets must be designated as 'Secondary Bystander'.
+                    # For any track marked as a bystander, completely freeze their internal clocks,
+                    # bypass database lookup validations, and do NOT render individual state metrics cards.
+                    matched_target.state = "Secondary Bystander"
+                    continue
+                
+                # Primary target posture & calibration evaluation
+                if matched_target.name == "Unknown":
                     profile_name = self._match_profile(embedding)
                     if profile_name:
                         matched_target.name = profile_name
@@ -118,22 +178,12 @@ class TrackerEngine:
                         
                         matched_target.state = "Calibrating"
                         matched_target.calibration_start = current_time
-                        
-                    self.targets[track_hash] = matched_target
-                
-                dt = current_time - matched_target.last_update
-                matched_target.last_seen = current_time
-                matched_target.last_update = current_time
-                matched_target.box = box
-                active_ids.add(matched_target.track_id)
-                
-                matched_target.pitch = det["pitch"]
-                matched_target.yaw = det["yaw"]
-                matched_target.roll = det["roll"]
-                
-                center_shoulder_y = (shoulders[0][1] + shoulders[1][1]) / 2.0
-                normalized_shoulder_y = center_shoulder_y / h
-                
+                        matched_target.calibration_pitch_samples = []
+                        matched_target.calibration_shoulder_samples = []
+                    else:
+                        matched_target.state = "Unregistered Guest - Monitoring Suspended"
+                        continue
+
                 if matched_target.name == "Unknown":
                     matched_target.state = "Unregistered Guest - Monitoring Suspended"
                     continue
@@ -141,32 +191,38 @@ class TrackerEngine:
                 gaze_x, is_looking_away = self.inference_engine.extract_pupil_gaze(frame, det["l_eye"], det["r_eye"])
                 matched_target.gaze_x = gaze_x
                 matched_target.is_looking_away = is_looking_away
-
-                # Calibration Phase
+                
                 if matched_target.state == "Calibrating":
                     elapsed_calib = current_time - matched_target.calibration_start
                     matched_target.calibration_pitch_samples.append(matched_target.pitch)
-                    matched_target.calibration_shoulder_samples.append(normalized_shoulder_y)
+                    matched_target.calibration_shoulder_samples.append(current_ratio)
                     
                     if elapsed_calib >= 3.0:
                         matched_target.baseline_pitch = float(np.mean(matched_target.calibration_pitch_samples))
-                        matched_target.baseline_shoulder_y = float(np.mean(matched_target.calibration_shoulder_samples))
+                        matched_target.baseline_shoulder_ratio = float(np.mean(matched_target.calibration_shoulder_samples))
                         matched_target.state = "Tracking Active"
                     continue
                 
-                # Active Tracking Phase
-                pitch_diff = abs(matched_target.pitch - matched_target.baseline_pitch)
-                shoulder_diff = matched_target.baseline_shoulder_y - normalized_shoulder_y
+                # Camera-Agnostic Posture Evaluation
+                relative_slouch = matched_target.pitch - matched_target.baseline_pitch
                 
-                if shoulder_diff > 0.15:
-                    matched_target.is_standing = True
+                # Proportional Standing Gate
+                is_standing = current_ratio < (matched_target.baseline_shoulder_ratio * 0.82)
+                matched_target.is_standing = is_standing
+
+                if matched_target.is_looking_away:
+                    matched_target.gaze_away_clock += dt
+                    if matched_target.gaze_away_clock > matched_target.gaze_away_limit:
+                        matched_target.state = "Ocular Break Recommended"
+                    else:
+                        matched_target.state = "Looking Away"
+                    continue
                 else:
-                    matched_target.is_standing = False
+                    matched_target.gaze_away_clock = 0.0
 
                 if matched_target.is_standing:
-                    matched_target.state = "Standing Mode"
+                    matched_target.state = "Standing"
                     matched_target.standing_duration_clock += dt
-                    
                     if matched_target.standing_duration_clock >= matched_target.stand_requirement:
                         matched_target.sitting_duration_clock = 0.0
                 else:
@@ -175,31 +231,25 @@ class TrackerEngine:
                         matched_target.state = "Session Limit Reached - Stand Up!"
                         matched_target.standing_duration_clock = 0.0
                     else:
-                        if matched_target.is_looking_away:
-                            matched_target.gaze_away_clock += dt
-                            if matched_target.gaze_away_clock > matched_target.gaze_away_limit:
-                                matched_target.state = "Ocular Break Recommended"
-                            else:
-                                matched_target.state = "Looking Away"
+                        if relative_slouch > matched_target.slouch_sensitivity:
+                            matched_target.state = "Posture Deficit Alert"
+                            matched_target.slouch_timer += dt
                         else:
-                            matched_target.gaze_away_clock = 0.0
-                            if pitch_diff > matched_target.slouch_sensitivity:
-                                matched_target.state = "Posture Deficit Alert"
-                                matched_target.slouch_timer += dt
-                            else:
-                                matched_target.state = "Tracking Active"
-                                matched_target.slouch_timer = 0.0
+                            matched_target.state = "Tracking Active"
+                            matched_target.slouch_timer = 0.0
                                     
             to_delete = []
-            for tid, target in self.targets.items():
-                elapsed = current_time - target.last_seen
-                if elapsed > 10.0:
-                    to_delete.append(tid)
-                    if target.name != "Unknown":
-                        self.db_manager.log_metric(target.name, "session_ended", target.sitting_duration_clock)
-                elif tid not in active_ids:
-                    if target.state != "Calibrating":
-                        target.state = "Coasting (Paused)"
+            for tid, target in list(self.targets.items()):
+                if tid not in active_ids:
+                    # Freeze internal clocks if missing
+                    elapsed = current_time - target.last_seen
+                    if elapsed > 10.0:
+                        to_delete.append(tid)
+                        if target.name != "Unknown":
+                            self.db_manager.log_session_metrics(target.name, "session_ended", target.sitting_duration_clock)
+                    else:
+                        if target.state != "Calibrating" and target.state != "Secondary Bystander":
+                            target.state = "Coasting (Paused)"
                     
             for tid in to_delete:
                 del self.targets[tid]

@@ -11,10 +11,11 @@ from core.ingestion import DynamicCameraIngestion
 from core.inference import AIInferenceEngine
 from core.tracking import TrackerEngine
 
+# Initialize Global Instance Handles
 db_manager = DatabaseManager()
-ingestion_pipeline = DynamicCameraIngestion()
 inference_engine = AIInferenceEngine()
 tracker_engine = TrackerEngine(inference_engine, db_manager)
+ingestion_pipeline = DynamicCameraIngestion()
 
 app = Flask(__name__)
 state_mutex = threading.Lock()
@@ -26,9 +27,14 @@ def dashboard():
 @app.route('/api/metrics_slice', methods=['GET'])
 def metrics_slice():
     snapshot = []
+    # Protected using a global state_mutex lock
     with state_mutex:
         with tracker_engine.mutex:
             for tid, target in tracker_engine.targets.items():
+                # Bystanders are filtered out and not rendered on the UI dashboard
+                if target.state == "Secondary Bystander":
+                    continue
+                # Deep-copy variables into primitive string/float structures before serialization
                 snapshot.append({
                     "id": str(target.track_id),
                     "name": str(target.name),
@@ -51,12 +57,12 @@ def create_profile_api():
     embedding = None
     with tracker_engine.mutex:
         for tid, target in tracker_engine.targets.items():
-            if target.name == "Unknown":
+            if target.name == "Unknown" and target.state != "Secondary Bystander":
                 embedding = target.embedding
                 break
                 
     if embedding is None:
-        return jsonify({"error": "No unregistered target found."}), 400
+        return jsonify({"error": "No unregistered active target found."}), 400
         
     try:
         db_manager.create_profile(name, embedding)
@@ -67,7 +73,7 @@ def create_profile_api():
     
     with tracker_engine.mutex:
         for tid, target in tracker_engine.targets.items():
-            if target.name == "Unknown":
+            if target.name == "Unknown" and target.state != "Secondary Bystander":
                 target.name = name
                 target.state = "Calibrating"
                 target.calibration_start = time.time()
@@ -77,7 +83,7 @@ def create_profile_api():
 
 @app.route('/api/profiles', methods=['GET'])
 def get_profiles_api():
-    profiles = db_manager.read_profiles()
+    profiles = db_manager.load_all_profiles()
     resp = []
     for name, p in profiles.items():
         resp.append({
@@ -145,17 +151,23 @@ def tracking_worker():
             continue
         try:
             detections = inference_engine.run_inference(frame)
-            tracker_engine.update(frame, detections, frame.shape)
+            tracker_engine.process_frame_mot(frame, detections, frame.shape)
             
             annotated_frame = frame.copy()
             with tracker_engine.mutex:
                 for tid, target in tracker_engine.targets.items():
                     box = target.box
                     x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                    color = (0, 255, 0) if target.name != "Unknown" else (0, 0, 255)
-                    if target.state == "Calibrating": color = (255, 255, 0)
-                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(annotated_frame, f"{target.name}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    
+                    if target.state == "Secondary Bystander":
+                        color = (128, 128, 128)
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 1)
+                        cv2.putText(annotated_frame, "Bystander", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    else:
+                        color = (0, 255, 0) if target.name != "Unknown" else (0, 0, 255)
+                        if target.state == "Calibrating": color = (255, 255, 0)
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(annotated_frame, f"{target.name} ({target.state})", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             
             with state_mutex:
                 latest_frame = annotated_frame
@@ -165,9 +177,11 @@ def tracking_worker():
             time.sleep(0.1)
 
 def signal_handler(sig, frame):
-    print("\\n[!] SIGINT received. Commencing clean resource teardown...")
-    ingestion_pipeline.stop()
-    sys.exit(0)
+    print("\n[!] SIGINT received. Commencing clean resource teardown...")
+    try:
+        ingestion_pipeline.stop()
+    finally:
+        sys.exit(0)
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
