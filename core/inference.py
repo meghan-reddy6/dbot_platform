@@ -13,9 +13,10 @@ class QNNInferenceSession(original_InferenceSession):
             providers = ['QNNExecutionProvider', 'CPUExecutionProvider']
             provider_options = [
                 {
-                    'backend_path': '/usr/lib/libQnnHtp.so',
-                    'htp_performance_mode': 'burst',
-                    'enable_htp_fp16_precision': '1'
+                    "backend_path": "/usr/lib/libQnnHtp.so",
+                    "htp_performance_mode": "burst",
+                    "htp_precision": "fp16",
+                    "vtcm_size_in_mb": "4"
                 },
                 {}
             ]
@@ -32,6 +33,11 @@ try:
 except ImportError:
     HAVE_YOLO = False
     print("[!] Ultralytics YOLO not found.")
+
+class Keypoint:
+    def __init__(self, x_pixel, y_pixel, w, h):
+        self.x = float(x_pixel / w)
+        self.y = float(y_pixel / h)
 
 class AIInferenceEngine:
     def __init__(self):
@@ -70,23 +76,47 @@ class AIInferenceEngine:
         if self.pose_model:
             results = self.pose_model(frame, verbose=False)
             for r in results:
-                boxes = r.boxes.xyxy.cpu().numpy()
+                # Keypoints and confidence
                 keypoints = r.keypoints.xy.cpu().numpy()
+                keypoints_conf = r.keypoints.conf.cpu().numpy() if (hasattr(r.keypoints, 'conf') and r.keypoints.conf is not None) else None
                 
-                for i in range(len(boxes)):
-                    box = boxes[i]
+                for i in range(len(keypoints)):
                     kpts = keypoints[i]
+                    confs = keypoints_conf[i] if keypoints_conf is not None else np.ones(len(kpts))
                     
-                    x1, y1, x2, y2 = box
-                    bw = x2 - x1
-                    bh = y2 - y1
-                    
-                    if bw <= 0 or bh <= 0 or x1 < 0 or y1 < 0:
+                    # Ensure nose, left shoulder, and right shoulder are detected with confidence > 0.40
+                    # This prevents using default (0, 0) coordinates when keypoints are not detected.
+                    if len(kpts) < 7 or confs[0] <= 0.40 or confs[5] <= 0.40 or confs[6] <= 0.40:
                         continue
                         
+                    # Force each track to maintain its own independent, tightly-bounded box calculated exclusively from individual skeleton keypoints:
+                    # x_min = min(kp.x for kp in skeleton if kp.conf > 0.40)
+                    valid_kpts = [kpts[j] for j in range(len(kpts)) if confs[j] > 0.40]
+                    if not valid_kpts:
+                        continue
+                        
+                    xs = [kp[0] for kp in valid_kpts]
+                    ys = [kp[1] for kp in valid_kpts]
+                    
+                    x_min = min(xs)
+                    x_max = max(xs)
+                    y_min = min(ys)
+                    y_max = max(ys)
+                    
+                    bw = x_max - x_min
+                    bh = y_max - y_min
+                    
+                    # Strict background noise filter: Any box whose width collapses below 18% of screen width must be discarded immediately
+                    if bw < 0.18 * w:
+                        continue
+                        
+                    box = np.array([x_min, y_min, x_max, y_max])
                     box_area = bw * bh
                     frame_area = w * h
                     
+                    if box_area > (0.85 * frame_area):
+                        continue
+                        
                     if len(kpts) < 13:
                         continue
                         
@@ -100,22 +130,30 @@ class AIInferenceEngine:
                     l_hip = kpts[11]
                     r_hip = kpts[12]
                     
-                    # Absolute shoulder width in normalized pixel units
-                    shoulder_width = np.abs(l_shoulder[0] - r_shoulder[0]) / w
+                    pose = {
+                        "nose": Keypoint(nose[0], nose[1], w, h),
+                        "left_shoulder": Keypoint(l_shoulder[0], l_shoulder[1], w, h),
+                        "right_shoulder": Keypoint(r_shoulder[0], r_shoulder[1], w, h)
+                    }
                     
-                    # Focal target engagement filters:
-                    # - If shoulder width < 0.18 (background noise / too far)
-                    # - If bounding box area covers > 85% of frame area (edge explosion)
-                    if shoulder_width < 0.18 or box_area > (0.85 * frame_area):
+                    shoulder_width = np.abs(pose["left_shoulder"].x - pose["right_shoulder"].x)
+                    if shoulder_width < 0.18:
                         continue
                         
+                    # Only calculate head pose if all 5 face keypoints have confidence > 0.40
+                    # This prevents garbage outputs from feeding solvePnP.
+                    has_valid_face = (confs[1] > 0.40 and confs[2] > 0.40 and confs[3] > 0.40 and confs[4] > 0.40)
                     landmarks_5 = np.array([nose, l_eye, r_eye, l_ear, r_ear], dtype=np.float32)
+                    
+                    if has_valid_face:
+                        pitch, yaw, roll = self._solve_pnp(landmarks_5, (h, w))
+                    else:
+                        pitch, yaw, roll = self.last_pitch, self.last_yaw, self.last_roll
+                        
                     shoulders = [l_shoulder, r_shoulder]
                     hips = [l_hip, r_hip]
                     
-                    pitch, yaw, roll = self._solve_pnp(landmarks_5, (h, w))
-                    
-                    roi = frame[int(y1):int(y2), int(x1):int(x2)]
+                    roi = frame[int(y_min):int(y_max), int(x_min):int(x_max)]
                     if roi.size > 0:
                         roi_resized = cv2.resize(roi, (128, 128))
                         embedding = np.mean(roi_resized, axis=(0, 1)).astype(np.float32)
@@ -127,6 +165,7 @@ class AIInferenceEngine:
                     detections.append({
                         "box": box,
                         "landmarks": landmarks_5,
+                        "pose": pose,
                         "nose": nose,
                         "l_eye": l_eye,
                         "r_eye": r_eye,

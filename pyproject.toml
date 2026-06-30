@@ -13,4 +13,5 @@ dependencies = [
     "psutil>=7.0.0",
     "scipy>=1.10.0",
     "onnxruntime>=1.27.0",
+    "pyttsx3>=2.90",
 ]

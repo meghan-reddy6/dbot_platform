@@ -76,11 +76,17 @@ class DynamicCameraIngestion:
 
     def stop(self):
         self.running = False
-        if self.cap:
-            self.cap.release()
-        if self.gst_process:
-            self.gst_process.terminate()
-            self.gst_process.wait()
+        try:
+            if self.cap:
+                self.cap.release()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if self.gst_process:
+                self.gst_process.terminate()
+                self.gst_process.wait()
+        except (Exception, KeyboardInterrupt):
+            pass
         if os.path.exists(self.pipe_path):
             try:
                 os.remove(self.pipe_path)
