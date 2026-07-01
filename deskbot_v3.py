@@ -47,7 +47,7 @@ def get_metrics_slice():
                 "screen_gaze_current": round(p.screen_gaze_accumulation_timer),
                 "screen_gaze_max": p.screen_gaze_limit,
                 "ocular_break_current": round(p.ocular_break_timer),
-                "ocular_break_max": p.ocular_break_duration
+                "ocular_break_max": p.gaze_away_limit
             })
         return jsonify(snapshot)
 

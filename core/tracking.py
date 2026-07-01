@@ -50,7 +50,7 @@ class Person:
         self.slouch_sensitivity = 15.0
         self.session_limit = 2400
         self.stand_requirement = 120
-        self.ocular_break_duration = 20.0
+        self.gaze_away_limit = 20.0
         self.screen_gaze_limit = 1200.0
         self.biometric_cutoff = 0.55
         
@@ -94,7 +94,7 @@ class TrackerEngine:
                     person.slouch_sensitivity = p["slouch_sensitivity"]
                     person.session_limit = p["session_limit"]
                     person.stand_requirement = p["stand_requirement"]
-                    person.ocular_break_duration = float(p.get("ocular_break_duration", 20.0))
+                    person.gaze_away_limit = float(p.get("ocular_break_duration", 20.0))
                     person.screen_gaze_limit = float(p.get("screen_gaze_limit", 1200.0))
                     person.biometric_cutoff = p.get("biometric_cutoff", 0.55)
 
@@ -130,7 +130,7 @@ class TrackerEngine:
                 except Exception: pass
             threading.Thread(target=voice_worker, daemon=True).start()
 
-    def _evaluate_single_target_health(self, person, pose, current_ratio, dt, current_time):
+    def _evaluate_single_target_health(self, person, pose, current_ratio, dt, current_time, frame_shape):
         if person.recovery_calibration_start is not None:
             elapsed_recovery = current_time - person.recovery_calibration_start
             shoulder_width = np.abs(pose['right_shoulder'].x - pose['left_shoulder'].x)
@@ -195,9 +195,14 @@ class TrackerEngine:
             normalized_height_delta = (person.baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
             is_standing = (normalized_height_delta > 0.48) or (ratio_val > (person.baseline_torso_ratio * 1.40))
             
+            is_pinned_to_ceiling = (person.box[1] <= frame_shape[0] * 0.05)
+            nose_missing = (pose['nose'].y <= 0.01)
+            
             person.is_standing = is_standing
 
-            if is_standing: 
+            if is_pinned_to_ceiling and nose_missing:
+                frame_candidate = "Standing"
+            elif is_standing: 
                 frame_candidate = "Standing"
             elif is_slouching: 
                 frame_candidate = "Posture Deficit Alert"
@@ -220,7 +225,7 @@ class TrackerEngine:
                 
                 if person.is_looking_away:
                     person.ocular_break_timer += dt
-                    if person.ocular_break_timer >= person.ocular_break_duration:
+                    if person.ocular_break_timer >= person.gaze_away_limit:
                         person.screen_gaze_accumulation_timer = 0.0
                         person.ocular_break_timer = 0.0
                         person.state = "Tracking Active"
@@ -254,12 +259,15 @@ class TrackerEngine:
                     person.baseline_shoulder_y = (person.baseline_shoulder_y * 0.95) + (shoulder_center_y * 0.05)
 
             # Forced falling-edge latch at the very end
-            if not is_standing and person.state == "Standing":
-                person.state = "Tracking Active"
+            is_effectively_standing = is_standing or (is_pinned_to_ceiling and nose_missing)
+            if not is_effectively_standing and person.state == "Standing":
                 person.state_history_window.clear()
-                person.baseline_shoulder_y = (person.baseline_shoulder_y * 0.7) + (shoulder_center_y * 0.3)
-                person.baseline_torso_ratio = (person.baseline_torso_ratio * 0.7) + (current_ratio * 0.3)
+                person.state = "Calibrating"
+                person.calibration_start = current_time
+                person.calibration_accumulator = []
                 person.standing_duration_clock = 0.0
+                person.calibration_announced = True
+                self._dispatch_voice("Re-calibrating posture workspace.")
 
             # Adaptive Momentum Anchor
             if person.state == "Tracking Active":
@@ -309,7 +317,12 @@ class TrackerEngine:
                     scale_aware_dist = pixel_distance / (shoulder_width * w + 1e-6)
                     cost = (scale_aware_dist * 0.5) + (np.linalg.norm(embedding - person.embedding) * 0.5)
                     
+                    is_pinned_to_ceiling = (box[1] <= h * 0.05)
+                    
                     max_cost_limit = 0.70 if person.state == "Searching / Re-acquiring" else 0.55
+                    if is_pinned_to_ceiling:
+                        max_cost_limit = max(max_cost_limit, 0.95)
+                        
                     if person.state == "Standing" or person.state == "Searching / Re-acquiring":
                         max_cost_limit = max(max_cost_limit, 0.90)
                     elif len(set(person.state_history_window)) > 1:
@@ -419,7 +432,7 @@ class TrackerEngine:
                 matched_person.gaze_x = gaze_x
                 matched_person.is_looking_away = is_looking_away
                 
-                self._evaluate_single_target_health(matched_person, pose, current_ratio, dt, current_time)
+                self._evaluate_single_target_health(matched_person, pose, current_ratio, dt, current_time, frame_shape)
                 
                 if matched_person.state != matched_person.last_state:
                     print(f"EVENT LOG | [{time.strftime('%Y-%m-%d %H:%M:%S')}] | User: {matched_person.name} | Transitioned state directly from {matched_person.last_state} to {matched_person.state} Mode.")
