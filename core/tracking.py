@@ -23,6 +23,7 @@ class Person:
         self.state = "Unregistered Guest"
         self.last_state = "Unregistered Guest"
         self.is_verified = False
+        self.is_posture_calibrated = False
         
         self.last_seen = time.time()
         self.last_update = time.time()
@@ -43,6 +44,9 @@ class Person:
         self.gaze_away_clock = 0.0
         self.slouch_timer = 0.0
         
+        self.posture_deficit_debounce_timer = 0.0
+        self.tracking_active_debounce_timer = 0.0
+        
         self.ocular_break_announced = False
         self.session_limit_announced = False
         self.slouch_announced = False
@@ -59,6 +63,7 @@ class Person:
         self.baseline_shoulder_y = 0.0      
         self.calibration_accumulator = []  
         self.calibration_start = None
+        self.consensus_counter = 0
         self.calibration_announced = False  
         self.last_log_time = 0.0            
         
@@ -83,8 +88,12 @@ class TrackerEngine:
         print(f"[BOOT] Database loaded. Active profile synchronization complete.")
         self.mutex = threading.Lock()
         self.inference_engine = inference_engine
+        
+        self.primary_user_track_id = None
+        self.primary_user_lost_frames = 0
         self.last_voice_alert = 0.0
         self.system_was_manually_cleared = False
+        self.manual_recalibration_requested = False
 
     def sync_profiles(self):
         with self.mutex:
@@ -109,11 +118,11 @@ class TrackerEngine:
             cosine_similarity = np.dot(norm_embedding, norm_template)
             
             penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
-            cutoff = 0.78
+            cutoff = 0.80
             if penalized_similarity >= cutoff and penalized_similarity > best_sim:
                 best_sim = penalized_similarity
                 best_match = name
-        return best_match
+        return best_match, best_sim
 
     def _dispatch_voice(self, text):
         now = time.time()
@@ -133,6 +142,12 @@ class TrackerEngine:
             threading.Thread(target=voice_worker, daemon=True).start()
 
     def _evaluate_single_target_health(self, person, pose, current_ratio, dt, current_time, frame_shape):
+        if person.name.startswith("Unknown") or self.primary_user_track_id is None:
+            person.state = "Unregistered Target"
+            person.posture_deficit_debounce_timer = 0.0
+            person.tracking_active_debounce_timer = 0.0
+            return
+
         if person.recovery_calibration_start is not None:
             elapsed_recovery = current_time - person.recovery_calibration_start
             shoulder_width = np.abs(pose['right_shoulder'].x - pose['left_shoulder'].x)
@@ -175,6 +190,7 @@ class TrackerEngine:
                     person.baseline_shoulder_y = float(np.mean([i[2] for i in person.calibration_accumulator]))
                 person.calibration_accumulator = []
                 person.state = "Tracking Active"
+                person.is_posture_calibrated = True
                 self._dispatch_voice("Calibration successful. Posture monitoring is now active.")
             return
 
@@ -192,10 +208,18 @@ class TrackerEngine:
             ratio_val = person.smoothed_ratio if person.smoothed_ratio is not None else current_ratio
 
             relative_slouch = pitch_val - person.baseline_pitch
-            is_slouching = (relative_slouch > person.slouch_sensitivity) or (ratio_val < (person.baseline_torso_ratio * 0.83))
+            
+            # Strict Directional Hysteresis Lock (Stop State Chatter)
+            if person.state == "Posture Deficit Alert":
+                # EXIT TRIGGER: Must sit fully upright to clear alert
+                is_fully_upright = (ratio_val >= person.baseline_torso_ratio * 0.98) and (relative_slouch <= person.slouch_sensitivity * 0.40)
+                is_slouching = not is_fully_upright
+            else:
+                # ENTRY TRIGGER: Tightened slouch check
+                is_slouching = (ratio_val < (person.baseline_torso_ratio * 0.90)) or (relative_slouch > person.slouch_sensitivity * 0.70)
             
             normalized_height_delta = (person.baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
-            is_standing = (normalized_height_delta > 0.48) or (ratio_val > (person.baseline_torso_ratio * 1.40))
+            is_standing = (normalized_height_delta > 0.65) or (ratio_val > (person.baseline_torso_ratio * 1.65))
             
             is_pinned_to_ceiling = (person.box[1] <= frame_shape[0] * 0.05)
             nose_missing = (pose['nose'].y <= 0.01)
@@ -213,17 +237,32 @@ class TrackerEngine:
 
             person.state_history_window.append(frame_candidate)
 
-            if len(person.state_history_window) >= 10:
-                person.state = Counter(person.state_history_window).most_common(1)[0][0]
+            if len(person.state_history_window) >= 25:
+                counter = Counter(person.state_history_window)
+                if person.state == "Posture Deficit Alert":
+                    if counter.get("Tracking Active", 0) >= 20:
+                        filtered_candidate = "Tracking Active"
+                    else:
+                        filtered_candidate = "Posture Deficit Alert"
+                else:
+                    filtered_candidate = counter.most_common(1)[0][0]
             else:
-                person.state = frame_candidate
+                filtered_candidate = frame_candidate
                 
-            # Bi-Directional Calibration Gate (Fix Sticky False Alerts)
-            if person.state == "Posture Deficit Alert":
-                if current_ratio >= person.baseline_torso_ratio * 0.96 and relative_slouch <= person.slouch_sensitivity:
-                    person.state_history_window.clear()
+            if filtered_candidate == "Posture Deficit Alert":
+                person.posture_deficit_debounce_timer += dt
+                person.tracking_active_debounce_timer = 0.0
+                if person.posture_deficit_debounce_timer >= 2.5:
+                    person.state = "Posture Deficit Alert"
+            elif filtered_candidate == "Tracking Active":
+                person.tracking_active_debounce_timer += dt
+                person.posture_deficit_debounce_timer = 0.0
+                if person.tracking_active_debounce_timer >= 1.5:
                     person.state = "Tracking Active"
-                    person.fast_relatch_frames = 5
+            elif filtered_candidate == "Standing":
+                person.state = "Standing"
+                person.posture_deficit_debounce_timer = 0.0
+                person.tracking_active_debounce_timer = 0.0
 
             # Wellness Timer Overrides
             if person.screen_gaze_accumulation_timer >= person.screen_gaze_limit:
@@ -293,7 +332,24 @@ class TrackerEngine:
     def update(self, frame, detections, frame_shape):
         return self.process_frame_mot(frame, detections, frame_shape)
 
+    def _calculate_iou(self, boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+
+        interArea = max(0, xB - xA) * max(0, yB - yA)
+        if interArea == 0:
+            return 0.0
+
+        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        iou = interArea / float(boxAArea + boxBArea - interArea)
+        return iou
+
     def process_frame_mot(self, frame, detections, frame_shape):
+        is_database_empty = (len(self.profiles) == 0)
+        current_face_crop = None
         current_time = time.time()
         h, w = frame_shape[:2]
         active_ids = set()
@@ -308,6 +364,20 @@ class TrackerEngine:
             score = shoulder_width - (np.abs(centroid_x - w/2) / w)
             ranked_detections.append((score, det))
         ranked_detections.sort(key=lambda x: x[0], reverse=True)
+        
+        filtered_ranked_detections = []
+        for det_tup in ranked_detections:
+            score, det = det_tup
+            box = det["box"]
+            is_duplicate = False
+            for f_score, f_det in filtered_ranked_detections:
+                if self._calculate_iou(box, f_det["box"]) > 0.40:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                filtered_ranked_detections.append(det_tup)
+                
+        ranked_detections = filtered_ranked_detections
         
         with self.mutex:
             primary_det = ranked_detections[0][1] if ranked_detections else None
@@ -389,7 +459,7 @@ class TrackerEngine:
                     if matched_person is None:
                         dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
                         spatial_penalty = dist_from_center / (w + 1e-6)
-                        profile_name = self._match_profile(embedding, spatial_penalty)
+                        profile_name, profile_sim = self._match_profile(embedding, spatial_penalty)
                         
                         matched_coasting_person = None
                         if profile_name and profile_name not in assigned_identities:
@@ -441,68 +511,83 @@ class TrackerEngine:
                     matched_person.smoothed_ratio = (1 - alpha) * matched_person.smoothed_ratio + alpha * current_ratio
                     matched_person.smoothed_y = (1 - alpha) * matched_person.smoothed_y + alpha * shoulder_center_y
                 
-                is_stable_active = matched_person.state in ["Tracking Active", "Standing", "Posture Deficit Alert", "Session Limit Reached - Stand Up!", "Ocular Break Recommended"]
-                
-                if is_stable_active and matched_person.name != "Unknown":
-                    profile_name = matched_person.name
-                else:
-                    dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
-                    spatial_penalty = dist_from_center / (w + 1e-6)
-                    profile_name = self._match_profile(embedding, spatial_penalty)
-                
-                if profile_name:
-                    if profile_name in assigned_identities and matched_person.name != profile_name:
-                        matched_person.name = "Unknown"
-                        matched_person.state = "Secondary Bystander" if not is_primary else "Unregistered Guest"
-                        matched_person.calibration_start = None
-                        matched_person.calibration_accumulator = []
-                    elif profile_name in assigned_identities and matched_person.name == profile_name:
-                        pass
-                    else:
-                        assigned_identities.add(profile_name)
-                        was_unknown = (matched_person.name == "Unknown")
-                        matched_person.name = profile_name
-                        if was_unknown:
-                            print(f"[BIOMETRICS] Face verified as: {matched_person.name}")
-                        
-                        p = self.profiles[profile_name]
-                        matched_person.slouch_sensitivity = p["slouch_sensitivity"]
-                        matched_person.session_limit = p["session_limit"]
-                        matched_person.stand_requirement = p["stand_requirement"]
-                        matched_person.gaze_away_limit = float(p.get("gaze_away_limit", 20.0))
-                        matched_person.biometric_cutoff = p.get("biometric_cutoff", 0.55)
-                        
-                        if was_unknown:
+                # SINGLE-TARGET BIOMETRIC ANCHOR LOCK OR REGISTRATION BYPASS
+                if is_database_empty:
+                    matched_person.name = "Unknown (Ready for Registration)"
+                    if matched_person.state in ["Unregistered Guest", "Secondary Bystander", "Searching / Re-acquiring"]:
+                        if not matched_person.is_posture_calibrated:
                             matched_person.state = "Calibrating"
                             matched_person.calibration_start = current_time
                             matched_person.calibration_accumulator = []
                             matched_person.calibration_announced = False
-                        elif matched_person.state in ["Unregistered Guest", "Searching / Re-acquiring", "Secondary Bystander"]:
-                            matched_person.state = "Tracking Active"
                 else:
-                    if matched_person.name != "Unknown" and matched_person.name in self.profiles:
-                        emb_norm = embedding / (np.linalg.norm(embedding) + 1e-6)
-                        db_emb = self.profiles[matched_person.name]["embedding"]
-                        db_emb_norm = db_emb / (np.linalg.norm(db_emb) + 1e-6)
-                        cosine_similarity = np.dot(emb_norm, db_emb_norm)
+                    if self.primary_user_track_id is not None:
+                        if matched_person.track_id == self.primary_user_track_id:
+                            # This is the anchor user. Skip facial recognition.
+                            if self.manual_recalibration_requested:
+                                matched_person.is_posture_calibrated = False
+                                matched_person.state = "Calibrating"
+                                matched_person.calibration_start = current_time
+                                matched_person.calibration_accumulator = []
+                                matched_person.calibration_announced = False
+                                self.manual_recalibration_requested = False
+                        else:
+                            # Absolute Bystander Blindness
+                            matched_person.name = "Unknown / Bystander"
+                            matched_person.state = "Secondary Bystander"
+                            continue
+                    else:
+                        # Anchor is not set. We are scanning for the primary user.
+                        # Enforce Minimum Face Crop Resolution Guard
+                        crop_y1, crop_y2 = int(max(0, box[1])), int(min(h, box[3]))
+                        crop_x1, crop_x2 = int(max(0, box[0])), int(min(w, box[2]))
+                        crop_h = crop_y2 - crop_y1
+                        crop_w = crop_x2 - crop_x1
                         
+                        if crop_h < 64 or crop_w < 64:
+                            print(f"[BIOMETRICS] Rejected face crop: Unverifiable / Too Distant ({crop_w}x{crop_h})")
+                            matched_person.name = "Unknown / Bystander"
+                            matched_person.state = "Secondary Bystander"
+                            matched_person.consensus_counter = 0
+                            continue
+                            
                         dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
                         spatial_penalty = dist_from_center / (w + 1e-6)
-                        penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
+                        profile_name, profile_sim = self._match_profile(embedding, spatial_penalty)
                         
-                        if penalized_similarity < 0.78:
-                            matched_person.calibration_accumulator = []
-                            matched_person.calibration_start = None
-                            matched_person.name = "Unknown"
-                            matched_person.state = "Unregistered Guest"
-                
-                if matched_person.name == "Unknown":
-                    if not is_primary:
-                        matched_person.state = "Secondary Bystander"
-                    else:
-                        matched_person.state = "Unregistered Guest"
-                    continue
-                    
+                        if profile_name and profile_sim >= 0.86:
+                            matched_person.consensus_counter += 1
+                            print(f"[BIOMETRICS] Scanning... Consensus {matched_person.consensus_counter}/15 (Sim: {profile_sim:.2f})")
+                            
+                            if matched_person.consensus_counter >= 15:
+                                self.primary_user_track_id = matched_person.track_id
+                                matched_person.name = profile_name
+                                print(f"[BIOMETRICS] Anchor Locked: {matched_person.name}")
+                                
+                                p_profile = self.profiles[profile_name]
+                                matched_person.slouch_sensitivity = p_profile["slouch_sensitivity"]
+                                matched_person.session_limit = p_profile["session_limit"]
+                                matched_person.stand_requirement = p_profile["stand_requirement"]
+                                matched_person.gaze_away_limit = float(p_profile.get("gaze_away_limit", 20.0))
+                                matched_person.biometric_cutoff = p_profile.get("biometric_cutoff", 0.55)
+                                
+                                if not matched_person.is_posture_calibrated:
+                                    matched_person.state = "Calibrating"
+                                    matched_person.calibration_start = current_time
+                                    matched_person.calibration_accumulator = []
+                                    matched_person.calibration_announced = False
+                            else:
+                                matched_person.name = "Unknown"
+                                matched_person.state = "Unregistered Guest"
+                                continue
+                        else:
+                            # Did not meet confidence or no profile found
+                            matched_person.consensus_counter = 0
+                            matched_person.name = "Unknown / Bystander"
+                            matched_person.state = "Secondary Bystander"
+                            continue
+
+                # The only track that reaches here is the primary user anchor track.
                 gaze_x, is_looking_away = self.inference_engine.extract_pupil_gaze(frame, det["l_eye"], det["r_eye"])
                 matched_person.gaze_x = gaze_x
                 matched_person.is_looking_away = is_looking_away
@@ -516,10 +601,25 @@ class TrackerEngine:
                 if current_time - matched_person.last_log_time >= 1.0:
                     matched_person.last_log_time = current_time
                                     
+            # HARD SESSION EXPIRATION & RESET
+            if self.primary_user_track_id is not None:
+                if self.primary_user_track_id not in active_ids:
+                    self.primary_user_lost_frames += 1
+                    if self.primary_user_lost_frames >= 15:
+                        print("[BIOMETRICS] Primary anchor lost for 15 frames. Forcing hard memory flush.")
+                        self.primary_user_track_id = None
+                        self.primary_user_lost_frames = 0
+                        
+                        # Purge all internal tracking associations and reset consensus counters
+                        self.tracked_persons.clear()
+                        self.track_counter = 0
+                else:
+                    self.primary_user_lost_frames = 0
+                                    
             for tid, person in list(self.tracked_persons.items()):
                 if tid not in active_ids:
                     if current_time - person.last_seen > 10.0:
-                        if person.name != "Unknown":
+                        if person.name != "Unknown" and person.name != "Unknown / Bystander":
                             self.db_manager.log_session_metrics(person.name, "session_ended", person.sitting_duration_clock)
                         del self.tracked_persons[tid]
                     else:

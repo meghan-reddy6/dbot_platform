@@ -34,21 +34,23 @@ def index():
 def get_metrics_slice():
     with state_mutex:
         snapshot = []
+        is_db_empty = (len(health_evaluator.profiles) == 0)
         for p in list(health_evaluator.tracked_persons.values()):
-            snapshot.append({
-                "id": p.track_id, 
-                "name": p.name, 
-                "state": p.state,
-                "sitting_time": p.sitting_duration_clock, 
-                "standing_time": p.standing_duration_clock, 
-                "pitch": p.pitch,
-                "session_limit": p.session_limit,
-                "stand_requirement": p.stand_requirement,
-                "screen_gaze_current": round(p.screen_gaze_accumulation_timer),
-                "screen_gaze_max": p.screen_gaze_limit,
-                "ocular_break_current": round(p.ocular_break_timer),
-                "ocular_break_max": p.gaze_away_limit
-            })
+            if is_db_empty or p.track_id == health_evaluator.primary_user_track_id:
+                snapshot.append({
+                    "id": p.track_id, 
+                    "name": p.name, 
+                    "state": p.state,
+                    "sitting_time": p.sitting_duration_clock, 
+                    "standing_time": p.standing_duration_clock, 
+                    "pitch": p.pitch,
+                    "session_limit": p.session_limit,
+                    "stand_requirement": p.stand_requirement,
+                    "screen_gaze_current": round(p.screen_gaze_accumulation_timer),
+                    "screen_gaze_max": p.screen_gaze_limit,
+                    "ocular_break_current": round(p.ocular_break_timer),
+                    "ocular_break_max": p.gaze_away_limit
+                })
         return jsonify(snapshot)
 
 @app.route('/api/profiles')
@@ -77,7 +79,7 @@ def create_profile_endpoint():
     with state_mutex:
         person_to_register = None
         for p in health_evaluator.tracked_persons.values():
-            if p.name == "Unknown" or p.state == "Unregistered Guest":
+            if p.name == "Unknown (Ready for Registration)" or "Unknown" in p.name:
                 person_to_register = p
                 break
                 
@@ -124,13 +126,8 @@ def delete_profile_endpoint():
 
 @app.route('/api/profile/recalibrate', methods=['POST'])
 def trigger_manual_recalibration():
-    with health_evaluator.mutex:
-        for p in health_evaluator.tracked_persons.values():
-            if p.name != "Unknown" and not p.state.startswith("Secondary") and not p.state.startswith("Unregistered"):
-                p.state = "Calibrating"
-                p.calibration_start = time.time()
-                p.calibration_accumulator = []
-                p.calibration_announced = False
+    with state_mutex:
+        health_evaluator.manual_recalibration_requested = True
     return jsonify({"status": "success", "message": "Manual recalibration cycle triggered successfully."})
 
 def video_stream_generator():
