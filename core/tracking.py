@@ -80,6 +80,7 @@ class TrackerEngine:
         self.track_counter = 0
         self.db_manager = db_manager
         self.profiles = self.db_manager.load_all_profiles()
+        print(f"[BOOT] Database loaded. Active profile synchronization complete.")
         self.mutex = threading.Lock()
         self.inference_engine = inference_engine
         self.last_voice_alert = 0.0
@@ -162,7 +163,7 @@ class TrackerEngine:
             if current_time - getattr(person, 'last_log_time', 0.0) >= 1.0:
                 person.last_log_time = current_time
                 remaining = max(0.0, 3.0 - elapsed_calib)
-                print(f"[!] PROMPT: {person.name}, calibrating... {remaining:.1f}s remaining.")
+                # print(f"[!] PROMPT: {person.name}, calibrating... {remaining:.1f}s remaining.")
                 
             person.calibration_accumulator.append((person.pitch, current_ratio_computed, shoulder_center_y))
             
@@ -190,7 +191,7 @@ class TrackerEngine:
             ratio_val = person.smoothed_ratio if person.smoothed_ratio is not None else current_ratio
 
             relative_slouch = pitch_val - person.baseline_pitch
-            is_slouching = (relative_slouch > person.slouch_sensitivity) or (ratio_val < (person.baseline_torso_ratio * 0.82))
+            is_slouching = (relative_slouch > person.slouch_sensitivity) or (ratio_val < (person.baseline_torso_ratio * 0.83))
             
             normalized_height_delta = (person.baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
             is_standing = (normalized_height_delta > 0.48) or (ratio_val > (person.baseline_torso_ratio * 1.40))
@@ -215,11 +216,19 @@ class TrackerEngine:
                 person.state = Counter(person.state_history_window).most_common(1)[0][0]
             else:
                 person.state = frame_candidate
+                
+            # Bi-Directional Calibration Gate (Fix Sticky False Alerts)
+            if person.state == "Posture Deficit Alert":
+                if current_ratio >= person.baseline_torso_ratio * 0.96 and relative_slouch <= person.slouch_sensitivity:
+                    person.state_history_window.clear()
+                    person.state = "Tracking Active"
+                    person.fast_relatch_frames = 5
 
             # Wellness Timer Overrides
             if person.screen_gaze_accumulation_timer >= person.screen_gaze_limit:
                 person.state = "Ocular Break Recommended"
                 if not person.ocular_break_announced:
+                    print(f"[TIMER ALERT] Triggering Voice Alert for: {person.state}")
                     self._dispatch_voice("Attention, eye strain warning. Please look away from the screen.")
                     person.ocular_break_announced = True
                 
@@ -236,6 +245,7 @@ class TrackerEngine:
                 if person.sitting_duration_clock >= person.session_limit:
                     person.state = "Session Limit Reached - Stand Up!"
                     if not person.session_limit_announced:
+                        print(f"[TIMER ALERT] Triggering Voice Alert for: {person.state}")
                         self._dispatch_voice(f"{person.name}, you have been sitting for too long. Please stand up.")
                         person.session_limit_announced = True
 
@@ -243,6 +253,7 @@ class TrackerEngine:
                 person.slouch_timer += dt
                 if person.slouch_timer >= 8.0:
                     if not person.slouch_announced:
+                        print(f"[TIMER ALERT] Triggering Voice Alert for: {person.state}")
                         self._dispatch_voice(f"Please correct your posture, {person.name}.")
                         person.slouch_announced = True
             else:
@@ -271,8 +282,12 @@ class TrackerEngine:
 
             # Adaptive Momentum Anchor
             if person.state == "Tracking Active":
-                person.baseline_shoulder_y = (person.baseline_shoulder_y * 0.995) + (shoulder_center_y * 0.005)
-                person.baseline_torso_ratio = (person.baseline_torso_ratio * 0.995) + (current_ratio * 0.005)
+                fast_frames = getattr(person, 'fast_relatch_frames', 0)
+                alpha = 0.20 if fast_frames > 0 else 0.005
+                person.baseline_shoulder_y = (person.baseline_shoulder_y * (1.0 - alpha)) + (shoulder_center_y * alpha)
+                person.baseline_torso_ratio = (person.baseline_torso_ratio * (1.0 - alpha)) + (current_ratio * alpha)
+                if fast_frames > 0:
+                    person.fast_relatch_frames = fast_frames - 1
 
     def update(self, frame, detections, frame_shape):
         return self.process_frame_mot(frame, detections, frame_shape)
@@ -393,6 +408,8 @@ class TrackerEngine:
                         assigned_names.add(profile_name)
                         was_unknown = (matched_person.name == "Unknown")
                         matched_person.name = profile_name
+                        if was_unknown:
+                            print(f"[BIOMETRICS] Face verified as: {matched_person.name}")
                         
                         p = self.profiles[profile_name]
                         matched_person.slouch_sensitivity = p["slouch_sensitivity"]
@@ -435,12 +452,11 @@ class TrackerEngine:
                 self._evaluate_single_target_health(matched_person, pose, current_ratio, dt, current_time, frame_shape)
                 
                 if matched_person.state != matched_person.last_state:
-                    print(f"EVENT LOG | [{time.strftime('%Y-%m-%d %H:%M:%S')}] | User: {matched_person.name} | Transitioned state directly from {matched_person.last_state} to {matched_person.state} Mode.")
+                    print(f"[STATE CHANGE] {matched_person.name} transitioned from {matched_person.last_state} -> {matched_person.state}")
                     matched_person.last_state = matched_person.state
                 
                 if current_time - matched_person.last_log_time >= 1.0:
                     matched_person.last_log_time = current_time
-                    print(f"[LOG] {time.strftime('%Y-%m-%d %H:%M:%S')} | Person: {matched_person.name} | State: {matched_person.state} | Pitch: {matched_person.pitch:+.1f}° | Torso Ratio: {current_ratio:.3f} | Sitting: {int(matched_person.sitting_duration_clock)}s | Standing: {int(matched_person.standing_duration_clock)}s")
                                     
             for tid, person in list(self.tracked_persons.items()):
                 if tid not in active_ids:
@@ -452,5 +468,5 @@ class TrackerEngine:
                         if person.state not in ["Calibrating", "Secondary Bystander"]:
                             person.state = "Searching / Re-acquiring"
                     if person.state != person.last_state:
-                        print(f"EVENT LOG | [{time.strftime('%Y-%m-%d %H:%M:%S')}] | User: {person.name} | Transitioned state directly from {person.last_state} to {person.state} Mode.")
+                        print(f"[STATE CHANGE] {person.name} transitioned from {person.last_state} -> {person.state}")
                         person.last_state = person.state

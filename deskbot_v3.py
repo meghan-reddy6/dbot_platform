@@ -122,6 +122,17 @@ def delete_profile_endpoint():
         health_evaluator.sync_profiles()
         return jsonify({"message": f"Successfully deleted user profile for {name}."})
 
+@app.route('/api/profile/recalibrate', methods=['POST'])
+def trigger_manual_recalibration():
+    with health_evaluator.mutex:
+        for p in health_evaluator.tracked_persons.values():
+            if p.name != "Unknown" and not p.state.startswith("Secondary") and not p.state.startswith("Unregistered"):
+                p.state = "Calibrating"
+                p.calibration_start = time.time()
+                p.calibration_accumulator = []
+                p.calibration_announced = False
+    return jsonify({"status": "success", "message": "Manual recalibration cycle triggered successfully."})
+
 def video_stream_generator():
     while True:
         if latest_frame_buffer is not None:

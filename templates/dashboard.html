@@ -88,6 +88,9 @@
             <div style="margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center;">
                 <input type="text" id="new-profile-name" placeholder="Enter New Profile Name">
                 <button onclick="createProfile()">Register Current Unknown</button>
+                <button onclick="triggerManualRecalibrate()" style="background: linear-gradient(135deg, #3b82f6, #06b6d4); color: white; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-left: 10px; box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+                    🔄 Recalibrate Posture
+                </button>
             </div>
             <div id="profiles-container"></div>
         </div>
@@ -262,6 +265,16 @@
                 container.innerHTML = html;
             } catch (e) {
                 console.error("Profile sync error", e);
+            }
+        }
+
+        async function triggerManualRecalibrate() {
+            try {
+                const res = await fetch('/api/profile/recalibrate', { method: 'POST' });
+                const data = await res.json();
+                console.log(data.message);
+            } catch (e) {
+                console.error("Recalibration trigger failed", e);
             }
         }
 
