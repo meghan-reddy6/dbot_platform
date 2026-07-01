@@ -61,14 +61,14 @@ def get_profiles() -> Any:
     with state_mutex:
         profiles_list = []
         raw_profiles = db_conn.load_all_profiles()
-        for name, p in raw_profiles.items():
+        for name, profile_data in raw_profiles.items():
             profiles_list.append({
                 "user_name": name,
-                "slouch_sensitivity": p["slouch_sensitivity"],
-                "session_limit": p["session_limit"],
-                "stand_requirement": p["stand_requirement"],
-                "screen_gaze_limit": tracked_person.get("screen_gaze_limit", 1200),
-                "ocular_break_duration": tracked_person.get("ocular_break_duration", 20)
+                "slouch_sensitivity": profile_data["slouch_sensitivity"],
+                "session_limit": profile_data["session_limit"],
+                "stand_requirement": profile_data["stand_requirement"],
+                "screen_gaze_limit": profile_data.get("screen_gaze_limit", 1200),
+                "ocular_break_duration": profile_data.get("ocular_break_duration", 20)
             })
         return jsonify(profiles_list)
 
