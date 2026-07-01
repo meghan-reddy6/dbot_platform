@@ -84,7 +84,7 @@ def create_profile_endpoint() -> Any:
         person_to_register = None
         for tracked_person in health_evaluator.tracked_persons.values():
             if tracked_person.name == "Unknown (Ready for Registration)" or "Unknown" in tracked_person.name:
-                person_to_register = p
+                person_to_register = tracked_person
                 break
                 
         if person_to_register is None:
