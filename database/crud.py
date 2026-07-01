@@ -19,7 +19,8 @@ class DatabaseManager:
                 slouch_sensitivity REAL,
                 biometric_cutoff REAL,
                 stand_requirement INTEGER DEFAULT 180,
-                gaze_away_limit INTEGER DEFAULT 20
+                ocular_break_duration INTEGER DEFAULT 20,
+                screen_gaze_limit INTEGER DEFAULT 1200
             )
         ''')
         try:
@@ -27,7 +28,11 @@ class DatabaseManager:
         except sqlite3.OperationalError:
             pass
         try:
-            c.execute("ALTER TABLE users ADD COLUMN gaze_away_limit INTEGER DEFAULT 20")
+            c.execute("ALTER TABLE users ADD COLUMN ocular_break_duration INTEGER DEFAULT 20")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN screen_gaze_limit INTEGER DEFAULT 1200")
         except sqlite3.OperationalError:
             pass
             
@@ -43,18 +48,18 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def create_profile(self, user_name, face_embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, gaze_away_limit=20):
+    def create_profile(self, user_name, face_embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, ocular_break_duration=20, screen_gaze_limit=1200):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (user_name, face_embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit))
+        c.execute("INSERT INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                  (user_name, face_embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit))
         conn.commit()
         conn.close()
 
     def load_all_profiles(self):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, gaze_away_limit FROM users")
+        c.execute("SELECT user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit FROM users")
         rows = c.fetchall()
         conn.close()
         
@@ -68,15 +73,16 @@ class DatabaseManager:
                 "slouch_sensitivity": row[3],
                 "biometric_cutoff": row[4],
                 "stand_requirement": row[5] if row[5] is not None else 180,
-                "gaze_away_limit": row[6] if row[6] is not None else 20
+                "ocular_break_duration": row[6] if row[6] is not None else 20,
+                "screen_gaze_limit": row[7] if row[7] is not None else 1200
             }
         return profiles
 
-    def update_profile(self, user_name, slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit):
+    def update_profile(self, user_name, slouch_sensitivity, session_limit, stand_requirement, screen_gaze_limit, ocular_break_duration):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("UPDATE users SET slouch_sensitivity = ?, session_limit = ?, stand_requirement = ?, gaze_away_limit = ? WHERE user_name = ?", 
-                  (slouch_sensitivity, session_limit, stand_requirement, gaze_away_limit, user_name))
+        c.execute("UPDATE users SET slouch_sensitivity = ?, session_limit = ?, stand_requirement = ?, screen_gaze_limit = ?, ocular_break_duration = ? WHERE user_name = ?", 
+                  (slouch_sensitivity, session_limit, stand_requirement, screen_gaze_limit, ocular_break_duration, user_name))
         conn.commit()
         conn.close()
 

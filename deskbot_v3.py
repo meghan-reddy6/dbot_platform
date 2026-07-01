@@ -34,17 +34,20 @@ def index():
 def get_metrics_slice():
     with state_mutex:
         snapshot = []
-        for t in list(health_evaluator.targets.values()):
+        for p in list(health_evaluator.tracked_persons.values()):
             snapshot.append({
-                "id": t.track_id, 
-                "name": t.name, 
-                "state": t.state,
-                "sitting_time": t.sitting_duration_clock, 
-                "standing_time": t.standing_duration_clock, 
-                "pitch": t.pitch,
-                "session_limit": t.session_limit,
-                "stand_requirement": t.stand_requirement,
-                "gaze_away_time": t.gaze_away_clock
+                "id": p.track_id, 
+                "name": p.name, 
+                "state": p.state,
+                "sitting_time": p.sitting_duration_clock, 
+                "standing_time": p.standing_duration_clock, 
+                "pitch": p.pitch,
+                "session_limit": p.session_limit,
+                "stand_requirement": p.stand_requirement,
+                "screen_gaze_current": round(p.screen_gaze_accumulation_timer),
+                "screen_gaze_max": p.screen_gaze_limit,
+                "ocular_break_current": round(p.ocular_break_timer),
+                "ocular_break_max": p.ocular_break_duration
             })
         return jsonify(snapshot)
 
@@ -59,7 +62,8 @@ def get_profiles():
                 "slouch_sensitivity": p["slouch_sensitivity"],
                 "session_limit": p["session_limit"],
                 "stand_requirement": p["stand_requirement"],
-                "gaze_away_limit": p["gaze_away_limit"]
+                "screen_gaze_limit": p.get("screen_gaze_limit", 1200),
+                "ocular_break_duration": p.get("ocular_break_duration", 20)
             })
         return jsonify(profiles_list)
 
@@ -71,22 +75,22 @@ def create_profile_endpoint():
         return jsonify({"error": "Profile name is required."}), 400
         
     with state_mutex:
-        target_to_register = None
-        for t in health_evaluator.targets.values():
-            if t.name == "Unknown" or t.state == "Unregistered Guest":
-                target_to_register = t
+        person_to_register = None
+        for p in health_evaluator.tracked_persons.values():
+            if p.name == "Unknown" or p.state == "Unregistered Guest":
+                person_to_register = p
                 break
                 
-        if target_to_register is None:
+        if person_to_register is None:
             return jsonify({"error": "No unregistered skeleton targets currently visible in camera frame."}), 400
             
         try:
-            db_conn.create_profile(name, target_to_register.embedding)
-            target_to_register.name = name
-            target_to_register.state = "Calibrating"
-            target_to_register.calibration_start = time.time()
-            target_to_register.calibration_accumulator = []
-            target_to_register.calibration_announced = False
+            db_conn.create_profile(name, person_to_register.embedding)
+            person_to_register.name = name
+            person_to_register.state = "Calibrating"
+            person_to_register.calibration_start = time.time()
+            person_to_register.calibration_accumulator = []
+            person_to_register.calibration_announced = False
             health_evaluator.sync_profiles()
             return jsonify({"message": f"Successfully registered user profile for {name}."})
         except Exception as e:
@@ -96,7 +100,7 @@ def create_profile_endpoint():
 def update_profile():
     data = request.get_json()
     db_conn.update_profile(
-        data["name"], data["slouch_sensitivity"], data["session_limit"], data["stand_requirement"], data["gaze_away_limit"]
+        data["name"], data["slouch_sensitivity"], data["session_limit"], data["stand_requirement"], data["screen_gaze_limit"], data["ocular_break_duration"]
     )
     health_evaluator.sync_profiles()
     return jsonify({"message": "Synchronized profile configurations successfully."})
@@ -108,12 +112,13 @@ def delete_profile_endpoint():
     if not name:
         return jsonify({"error": "Profile name is required."}), 400
     with state_mutex:
+        health_evaluator.system_was_manually_cleared = True
         db_conn.delete_profile(name)
-        for t in health_evaluator.targets.values():
-            if t.name == name:
-                t.name = "Unknown"
-                t.state = "Unregistered Guest"
-                t.state_history_window.clear()
+        for p in health_evaluator.tracked_persons.values():
+            if p.name == name:
+                p.name = "Unknown"
+                p.state = "Unregistered Guest"
+                p.state_history_window.clear()
         health_evaluator.sync_profiles()
         return jsonify({"message": f"Successfully deleted user profile for {name}."})
 
@@ -142,11 +147,11 @@ def master_inference_loop():
         annotated_layer = frame.copy()
         
         with state_mutex:
-            for t in health_evaluator.targets.values():
-                x1, y1, x2, y2 = int(t.box[0]), int(t.box[1]), int(t.box[2]), int(t.box[3])
-                color = (0, 255, 135) if t.is_verified or t.name != "Unknown" else (67, 159, 255)
+            for p in health_evaluator.tracked_persons.values():
+                x1, y1, x2, y2 = int(p.box[0]), int(p.box[1]), int(p.box[2]), int(p.box[3])
+                color = (0, 255, 135) if p.is_verified or p.name != "Unknown" else (67, 159, 255)
                 cv2.rectangle(annotated_layer, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(annotated_layer, f"{t.name} [{t.state}]", (x1, y1-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.putText(annotated_layer, f"{p.name} [{p.state}]", (x1, y1-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             latest_frame_buffer = annotated_layer
 
 if __name__ == "__main__":

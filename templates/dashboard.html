@@ -125,7 +125,6 @@
                     let headPitch = t.pitch !== undefined ? Math.round(t.pitch) : 0;
                     let sessionLimit = t.session_limit !== undefined ? Math.round(t.session_limit) : 1200;
                     let standRequirement = t.stand_requirement !== undefined ? Math.round(t.stand_requirement) : 180;
-                    let gazeAwayTime = t.gaze_away_time !== undefined ? Math.round(t.gaze_away_time) : 0;
                     
                     let sitPct = Math.min(100, (sittingTime / sessionLimit) * 100);
                     let standPct = Math.min(100, (standingTime / standRequirement) * 100);
@@ -142,22 +141,47 @@
                     const card = document.createElement('div');
                     card.className = cardClass;
                     
+                    const stateStr = t.state || "";
+                    const isCalib = stateStr.includes("Calibrating");
+                    const isActiveSit = stateStr.includes("Tracking Active") || stateStr.includes("Looking Away");
+                    const isSlouch = stateStr.includes("Posture Deficit");
+                    const isOcular = stateStr.includes("Ocular Break");
+                    const isSession = stateStr.includes("Session Limit");
+                    const isStand = stateStr === "Standing";
+                    const isCoast = !isCalib && !isActiveSit && !isSlouch && !isOcular && !isSession && !isStand;
+
+                    const renderStateBlock = (active, emoji, label, color) => `
+                        <div style="flex: 1; text-align: center; padding: 10px 2px; border-radius: 8px; background: rgba(0,0,0,0.3); transition: all 0.4s ease;
+                                    ${active ? `opacity: 1.0; border: 1px solid ${color}; box-shadow: 0 0 16px ${color}A0; filter: blur(0px); grayscale(0%);` 
+                                             : `opacity: 0.20; border: 1px solid transparent; filter: blur(1.5px) grayscale(70%);`}">
+                            <div style="font-size: 1.4rem; margin-bottom: 4px;">${emoji}</div>
+                            <div style="font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.1; color: ${active ? color : '#cbd5e1'};">${label}</div>
+                        </div>
+                    `;
+
                     card.innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div>
-                                <div class="emoji-badge">${getEmoji(t.state)}</div>
-                                <div class="status-text">${t.state || 'Unknown State'}</div>
-                            </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem;">
+                            <div style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Live Status Matrix</div>
                             <div style="text-align: right; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 20px;">
-                                <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">TARGET:</span>
+                                <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">ACTIVE WORKSPACE USER:</span>
                                 <span style="font-size: 1rem; color: #fff; font-weight: 500;">${t.name}</span>
                             </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 6px; margin-bottom: 2rem;">
+                            ${renderStateBlock(isCalib, "⚙️", "Calibrating", "#38bdf8")}
+                            ${renderStateBlock(isActiveSit, "🧘", "Active", "#10b981")}
+                            ${renderStateBlock(isSlouch, "⚠️", "Posture", "#f59e0b")}
+                            ${renderStateBlock(isOcular, "👀", "Ocular", "#a855f7")}
+                            ${renderStateBlock(isSession, "🚨", "Limit", "#ef4444")}
+                            ${renderStateBlock(isStand, "🧍", "Standing", "#3b82f6")}
+                            ${renderStateBlock(isCoast, "⏸️", "Searching", "#64748b")}
                         </div>
                         
                         <div style="margin-top: 1.5rem;">
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
                                 <span>Continuous Sitting Limit Cap</span>
-                                <span>${sittingTime}s / ${sessionLimit}s</span>
+                                <span>${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m</span>
                             </div>
                             <div class="progress-container">
                                 <div class="progress-bar ${sitPct > 90 ? 'danger' : ''}" style="width: ${sitPct}%;"></div>
@@ -174,14 +198,24 @@
                             </div>
                         </div>
                         
+                        <div style="margin-top: 1rem; margin-bottom: 1rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem; font-weight: 500; color: #cbd5e1;">
+                                <span>Continuous Screen Gaze Limit</span>
+                                <span id="gaze-text-timer">${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m</span>
+                            </div>
+                            <div style="width: 100%; background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.02);">
+                                <div id="gaze-progress-bar" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); width: ${(t.screen_gaze_current / t.screen_gaze_max) * 100}%; transition: width 0.5s ease-out;"></div>
+                            </div>
+                        </div>
+                        
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
                             <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                 <div class="metric-label">Head Pitch</div>
                                 <div class="metric-val">${headPitch}°</div>
                             </div>
-                            <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
-                                <div class="metric-label">Gaze Away</div>
-                                <div class="metric-val">${gazeAwayTime}s</div>
+                            <div class="metric-card" style="background: rgba(15,23,42,0.4); padding: 1.2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03);">
+                                <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Ocular Break Accumulator</div>
+                                <div id="ocular-break-display" style="font-size: 2.2rem; font-weight: 700; color: #fff; margin-top: 0.5rem;">${t.ocular_break_current}s / ${t.ocular_break_max}s</div>
                             </div>
                         </div>
                     `;
@@ -202,37 +236,25 @@
                     <tr>
                         <th>Name</th>
                         <th>3D Posture Tolerance Edge</th>
-                        <th>Continuous Sitting Cap (Seconds)</th>
+                        <th>Continuous Sitting Cap (Minutes)</th>
                         <th>Required Stand Duration (Seconds)</th>
-                        <th>Look-Away Limit (s)</th>
+                        <th>Screen Gaze Limit (Minutes)</th>
+                        <th>Ocular Break Duration (Seconds)</th>
                         <th>Actions</th>
                     </tr>`;
                 
                 profiles.forEach(p => {
+                    let gazeLimitMin = Math.round(p.screen_gaze_limit / 60); 
+                    let sitLimitMin = Math.round(p.session_limit / 60);
                     html += `
                         <tr>
                             <td style="font-weight: 500;">${p.user_name}</td>
-                            <td>
-                                <input type="range" min="5" max="45" value="${p.slouch_sensitivity}" style="width: 100px;"
-                                    onchange="updateProfile('${p.user_name}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.gaze_away_limit})">
-                                <span>${p.slouch_sensitivity}°</span>
-                            </td>
-                            <td>
-                                <input type="range" min="60" max="3600" step="60" value="${p.session_limit}" style="width: 100px;"
-                                    onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, this.value, ${p.stand_requirement}, ${p.gaze_away_limit})">
-                                <span>${p.session_limit}s</span>
-                            </td>
-                            <td>
-                                <input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" style="width: 100px;"
-                                    onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.gaze_away_limit})">
-                                <span>${p.stand_requirement}s</span>
-                            </td>
-                            <td>
-                                <input type="range" min="5" max="120" step="5" value="${p.gaze_away_limit}" style="width: 100px;"
-                                    onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, this.value)">
-                                <span>${p.gaze_away_limit}s</span>
-                            </td>
-                            <td><button class="danger" onclick="deleteProfile('${p.user_name}')">Purge</button></td>
+                            <td><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${p.user_name}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
+                            <td><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
+                            <td><input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.stand_requirement}s</span></td>
+                            <td><input type="range" min="5" max="60" step="5" value="${gazeLimitMin}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
+                            <td><input type="range" min="5" max="120" step="5" value="${p.ocular_break_duration}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, this.value)"> <span>${p.ocular_break_duration}s</span></td>
+                            <td><button class="danger" onclick="deleteProfile('${p.user_name}')">Delete Profile</button></td>
                         </tr>
                     `;
                 });
@@ -259,7 +281,7 @@
             refreshLiveTelemetry();
         }
 
-        async function updateProfile(name, slouch_sens, limit, stand_req, gaze_limit) {
+        async function updateProfile(name, slouch_sens, limit, stand_req, screen_limit, break_duration) {
             await fetch('/api/profile/update', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -268,7 +290,8 @@
                     slouch_sensitivity: parseFloat(slouch_sens), 
                     session_limit: parseInt(limit),
                     stand_requirement: parseInt(stand_req),
-                    gaze_away_limit: parseInt(gaze_limit)
+                    screen_gaze_limit: parseInt(screen_limit),
+                    ocular_break_duration: parseInt(break_duration)
                 })
             });
             pollProfiles();
