@@ -110,30 +110,37 @@ class TrackerEngine:
             self.profiles = self.db_manager.load_all_profiles()
             for person in self.tracked_persons.values():
                 if person.name in self.profiles:
-                    p = self.profiles[person.name]
-                    person.slouch_sensitivity = p["slouch_sensitivity"]
-                    person.session_limit = p["session_limit"]
-                    person.stand_requirement = p["stand_requirement"]
-                    person.gaze_away_limit = float(tracked_person.get("ocular_break_duration", 20.0))
-                    person.screen_gaze_limit = float(tracked_person.get("screen_gaze_limit", 1200.0))
-                    person.biometric_cutoff = tracked_person.get("biometric_cutoff", 0.55)
+                    profile_config_map = self.profiles[person.name]
+                    person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
+                    person.session_limit = profile_config_map["session_limit"]
+                    person.stand_requirement = profile_config_map["stand_requirement"]
+                    person.gaze_away_limit = float(profile_config_map.get("ocular_break_duration", 20.0))
+                    person.screen_gaze_limit = float(profile_config_map.get("screen_gaze_limit", 1200.0))
+                    person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
 
     def _match_profile(self, embedding: np.ndarray, spatial_penalty: float = 0.0) -> Tuple[Optional[str], float]:
         """Compares target embedding against registered database profiles."""
-        best_match = None
-        best_normalized_cosine_similarity = -1.0
+        matched_db_profile_string = None
+        calculated_similarity = -1.0
         norm_embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
+        
         for name, profile in self.profiles.items():
             db_emb = profile["embedding"]
             norm_template = db_emb / (np.linalg.norm(db_emb) + 1e-6)
             cosine_similarity = np.dot(norm_embedding, norm_template)
             
             penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
-            cutoff = 0.80
-            if penalized_similarity >= cutoff and penalized_similarity > best_normalized_cosine_similarity:
-                best_normalized_cosine_similarity = penalized_similarity
-                best_match = name
-        return best_match, best_normalized_cosine_similarity
+            if penalized_similarity > calculated_similarity:
+                calculated_similarity = penalized_similarity
+                matched_db_profile_string = name
+                
+        validated_profile_name = None
+        if calculated_similarity >= 0.86:
+            validated_profile_name = matched_db_profile_string
+        else:
+            validated_profile_name = None
+            
+        return validated_profile_name, calculated_similarity
 
     def _dispatch_voice(self, text: str) -> None:
         """Dispatches an asynchronous voice alert."""
@@ -575,38 +582,38 @@ class TrackerEngine:
                             
                         dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
                         spatial_penalty = dist_from_center / (w + 1e-6)
-                        profile_name, normalized_cosine_similarity = self._match_profile(embedding, spatial_penalty)
                         
-                        if profile_name and normalized_cosine_similarity >= 0.86:
-                            matched_person.biometric_consensus_frame_counter += 1
-                            print(f"[BIOMETRICS] Scanning... Consensus {matched_person.biometric_consensus_frame_counter}/15 (Sim: {normalized_cosine_similarity:.2f})")
-                            
-                            if matched_person.biometric_consensus_frame_counter >= 15:
-                                self.primary_user_track_id = matched_person.track_id
-                                matched_person.name = profile_name
-                                print(f"[BIOMETRICS] Anchor Locked: {matched_person.name}")
-                                
-                                profile_config_map = self.profiles[profile_name]
-                                matched_person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
-                                matched_person.session_limit = profile_config_map["session_limit"]
-                                matched_person.stand_requirement = profile_config_map["stand_requirement"]
-                                matched_person.gaze_away_limit = float(profile_config_map.get("gaze_away_limit", 20.0))
-                                matched_person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
-                                
-                                if not matched_person.is_posture_calibrated:
-                                    matched_person.state = "Calibrating"
-                                    matched_person.calibration_start = current_time
-                                    matched_person.calibration_accumulator = []
-                                    matched_person.calibration_announced = False
-                            else:
-                                matched_person.name = "Unknown"
-                                matched_person.state = "Unregistered Guest"
-                                continue
-                        else:
-                            # Did not meet confidence or no profile found
+                        validated_profile_name, calculated_similarity = self._match_profile(embedding, spatial_penalty)
+                        
+                        if validated_profile_name is None:
                             matched_person.biometric_consensus_frame_counter = 0
                             matched_person.name = "Unknown / Bystander"
                             matched_person.state = "Secondary Bystander"
+                            continue
+                            
+                        matched_person.biometric_consensus_frame_counter += 1
+                        print(f"[BIOMETRICS] Scanning... Consensus {matched_person.biometric_consensus_frame_counter}/15 (Sim: {calculated_similarity:.2f})")
+                        
+                        if matched_person.biometric_consensus_frame_counter >= 15:
+                            self.primary_user_track_id = matched_person.track_id
+                            matched_person.name = validated_profile_name
+                            print(f"[BIOMETRICS] Anchor Locked: {matched_person.name}")
+                            
+                            profile_config_map = self.profiles[validated_profile_name]
+                            matched_person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
+                            matched_person.session_limit = profile_config_map["session_limit"]
+                            matched_person.stand_requirement = profile_config_map["stand_requirement"]
+                            matched_person.gaze_away_limit = float(profile_config_map.get("gaze_away_limit", 20.0))
+                            matched_person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
+                            
+                            if not matched_person.is_posture_calibrated:
+                                matched_person.state = "Calibrating"
+                                matched_person.calibration_start = current_time
+                                matched_person.calibration_accumulator = []
+                                matched_person.calibration_announced = False
+                        else:
+                            matched_person.name = "Unknown"
+                            matched_person.state = "Unregistered Guest"
                             continue
 
                 # The only track that reaches here is the primary user anchor track.
