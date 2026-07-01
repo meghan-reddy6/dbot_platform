@@ -99,18 +99,19 @@ class TrackerEngine:
                     person.screen_gaze_limit = float(p.get("screen_gaze_limit", 1200.0))
                     person.biometric_cutoff = p.get("biometric_cutoff", 0.55)
 
-    def _match_profile(self, embedding):
+    def _match_profile(self, embedding, spatial_penalty=0.0):
         best_match = None
-        best_dist = float('inf')
-        emb_norm = embedding / (np.linalg.norm(embedding) + 1e-6)
+        best_sim = -1.0
+        norm_embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
         for name, profile in self.profiles.items():
             db_emb = profile["embedding"]
-            db_emb_norm = db_emb / (np.linalg.norm(db_emb) + 1e-6)
-            cosine_similarity = np.dot(emb_norm, db_emb_norm)
-            dist = 1.0 - cosine_similarity
-            cutoff = profile.get("biometric_cutoff", 0.55)
-            if dist <= cutoff and dist < best_dist:
-                best_dist = dist
+            norm_template = db_emb / (np.linalg.norm(db_emb) + 1e-6)
+            cosine_similarity = np.dot(norm_embedding, norm_template)
+            
+            penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
+            cutoff = 0.78
+            if penalized_similarity >= cutoff and penalized_similarity > best_sim:
+                best_sim = penalized_similarity
                 best_match = name
         return best_match
 
@@ -297,7 +298,7 @@ class TrackerEngine:
         h, w = frame_shape[:2]
         active_ids = set()
         
-        assigned_names = set()
+        assigned_identities = set()
         
         ranked_detections = []
         for det in detections:
@@ -311,6 +312,11 @@ class TrackerEngine:
         with self.mutex:
             primary_det = ranked_detections[0][1] if ranked_detections else None
             
+            active_ids = set()
+            for score, det in ranked_detections:
+                det["matched_person"] = None
+                
+            # PASS 1 (Persistent Track Lock): Loop through existing, active tracks (known names)
             for score, det in ranked_detections:
                 embedding = det["embedding"]
                 box = det["box"]
@@ -318,13 +324,14 @@ class TrackerEngine:
                 det_centroid = ((box[0]+box[2])/2, (box[1]+box[3])/2)
                 shoulder_width = np.abs(pose["left_shoulder"].x - pose["right_shoulder"].x)
                 
-                is_primary = (det is primary_det)
                 matched_person = None
                 best_cost = float('inf')
                 
                 for tid, person in self.tracked_persons.items():
+                    if person.name == "Unknown" or tid in active_ids:
+                        continue
+                        
                     tc = person.get_centroid()
-                    
                     pixel_distance = np.linalg.norm(np.array(det_centroid) - np.array(tc))
                     if pixel_distance > (w * 0.25):
                         continue
@@ -333,7 +340,6 @@ class TrackerEngine:
                     cost = (scale_aware_dist * 0.5) + (np.linalg.norm(embedding - person.embedding) * 0.5)
                     
                     is_pinned_to_ceiling = (box[1] <= h * 0.05)
-                    
                     max_cost_limit = 0.70 if person.state == "Searching / Re-acquiring" else 0.55
                     if is_pinned_to_ceiling:
                         max_cost_limit = max(max_cost_limit, 0.95)
@@ -346,27 +352,67 @@ class TrackerEngine:
                     if cost <= max_cost_limit and cost < best_cost:
                         best_cost = cost; matched_person = person
                         
-                if matched_person is None:
-                    profile_name = self._match_profile(embedding)
-                    matched_coasting_person = None
-                    if profile_name and profile_name not in assigned_names:
-                        for tid, person in self.tracked_persons.items():
-                            if person.name == profile_name and person.state == "Searching / Re-acquiring":
-                                matched_coasting_person = person; break
-                                
-                    if matched_coasting_person is not None:
-                        matched_person = matched_coasting_person
-                        matched_person.state = "Tracking Active"
-                        matched_person.last_seen = current_time
-                        matched_person.last_update = current_time
-                        matched_person.recovery_calibration_start = current_time
-                        matched_person.recovery_accumulator = []
-                    else:
-                        track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_counter}"
-                        self.track_counter += 1
-                        matched_person = Person(track_hash, embedding, box)
-                        self.tracked_persons[track_hash] = matched_person
+                if matched_person is not None:
+                    det["matched_person"] = matched_person
+                    assigned_identities.add(matched_person.name)
+                    active_ids.add(matched_person.track_id)
 
+            # PASS 2 (New Detection Evaluation & Track Updates)
+            for score, det in ranked_detections:
+                matched_person = det["matched_person"]
+                is_primary = (det is primary_det)
+                
+                embedding = det["embedding"]
+                box = det["box"]
+                pose = det["pose"]
+                det_centroid = ((box[0]+box[2])/2, (box[1]+box[3])/2)
+                shoulder_width = np.abs(pose["left_shoulder"].x - pose["right_shoulder"].x)
+                
+                if matched_person is None:
+                    best_cost = float('inf')
+                    for tid, person in self.tracked_persons.items():
+                        if person.name != "Unknown" or tid in active_ids:
+                            continue
+                            
+                        tc = person.get_centroid()
+                        pixel_distance = np.linalg.norm(np.array(det_centroid) - np.array(tc))
+                        if pixel_distance > (w * 0.25):
+                            continue
+                            
+                        scale_aware_dist = pixel_distance / (shoulder_width * w + 1e-6)
+                        cost = (scale_aware_dist * 0.5) + (np.linalg.norm(embedding - person.embedding) * 0.5)
+                        
+                        max_cost_limit = 0.70 if person.state == "Searching / Re-acquiring" else 0.55
+                        if cost <= max_cost_limit and cost < best_cost:
+                            best_cost = cost; matched_person = person
+                            
+                    if matched_person is None:
+                        dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
+                        spatial_penalty = dist_from_center / (w + 1e-6)
+                        profile_name = self._match_profile(embedding, spatial_penalty)
+                        
+                        matched_coasting_person = None
+                        if profile_name and profile_name not in assigned_identities:
+                            for tid, person in self.tracked_persons.items():
+                                if person.name == profile_name and person.state == "Searching / Re-acquiring":
+                                    matched_coasting_person = person; break
+                                    
+                        if matched_coasting_person is not None:
+                            matched_person = matched_coasting_person
+                            matched_person.state = "Tracking Active"
+                            matched_person.last_seen = current_time
+                            matched_person.last_update = current_time
+                            matched_person.recovery_calibration_start = current_time
+                            matched_person.recovery_accumulator = []
+                            assigned_identities.add(profile_name)
+                        else:
+                            track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_counter}"
+                            self.track_counter += 1
+                            matched_person = Person(track_hash, embedding, box)
+                            self.tracked_persons[track_hash] = matched_person
+                    
+                    active_ids.add(matched_person.track_id)
+                    
                 dt = current_time - matched_person.last_update
                 if matched_person.state == "Searching / Re-acquiring":
                     matched_person.state = "Tracking Active"
@@ -376,7 +422,6 @@ class TrackerEngine:
                 matched_person.last_seen = current_time
                 matched_person.last_update = current_time
                 matched_person.box = box
-                active_ids.add(matched_person.track_id)
                 
                 matched_person.pitch = (matched_person.pitch * 0.6) + (det["pitch"] * 0.4)
                 matched_person.yaw = det["yaw"]
@@ -396,16 +441,25 @@ class TrackerEngine:
                     matched_person.smoothed_ratio = (1 - alpha) * matched_person.smoothed_ratio + alpha * current_ratio
                     matched_person.smoothed_y = (1 - alpha) * matched_person.smoothed_y + alpha * shoulder_center_y
                 
-                profile_name = self._match_profile(embedding)
+                is_stable_active = matched_person.state in ["Tracking Active", "Standing", "Posture Deficit Alert", "Session Limit Reached - Stand Up!", "Ocular Break Recommended"]
+                
+                if is_stable_active and matched_person.name != "Unknown":
+                    profile_name = matched_person.name
+                else:
+                    dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
+                    spatial_penalty = dist_from_center / (w + 1e-6)
+                    profile_name = self._match_profile(embedding, spatial_penalty)
                 
                 if profile_name:
-                    if profile_name in assigned_names:
+                    if profile_name in assigned_identities and matched_person.name != profile_name:
                         matched_person.name = "Unknown"
-                        matched_person.state = "Secondary Bystander"
+                        matched_person.state = "Secondary Bystander" if not is_primary else "Unregistered Guest"
                         matched_person.calibration_start = None
                         matched_person.calibration_accumulator = []
+                    elif profile_name in assigned_identities and matched_person.name == profile_name:
+                        pass
                     else:
-                        assigned_names.add(profile_name)
+                        assigned_identities.add(profile_name)
                         was_unknown = (matched_person.name == "Unknown")
                         matched_person.name = profile_name
                         if was_unknown:
@@ -431,8 +485,12 @@ class TrackerEngine:
                         db_emb = self.profiles[matched_person.name]["embedding"]
                         db_emb_norm = db_emb / (np.linalg.norm(db_emb) + 1e-6)
                         cosine_similarity = np.dot(emb_norm, db_emb_norm)
-                        cosine_dist = 1.0 - cosine_similarity
-                        if cosine_dist > matched_person.biometric_cutoff:
+                        
+                        dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
+                        spatial_penalty = dist_from_center / (w + 1e-6)
+                        penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
+                        
+                        if penalized_similarity < 0.78:
                             matched_person.calibration_accumulator = []
                             matched_person.calibration_start = None
                             matched_person.name = "Unknown"
