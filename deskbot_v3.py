@@ -3,6 +3,7 @@ import time
 import cv2
 import logging
 import threading
+from typing import Any
 from flask import Flask, render_template, Response, request, jsonify
 
 # SURGICAL LOG SILENCER: Disables high-frequency HTTP request polling print streams completely
@@ -31,30 +32,32 @@ def index():
     return render_template('dashboard.html')
 
 @app.route('/api/metrics_slice')
-def get_metrics_slice():
+def get_metrics_slice() -> Any:
+    """Streams JSON metrics for the primary anchor track."""
     with state_mutex:
         snapshot = []
         is_db_empty = (len(health_evaluator.profiles) == 0)
-        for p in list(health_evaluator.tracked_persons.values()):
-            if is_db_empty or p.track_id == health_evaluator.primary_user_track_id:
+        for tracked_person in list(health_evaluator.tracked_persons.values()):
+            if is_db_empty or tracked_person.track_id == health_evaluator.primary_user_track_id:
                 snapshot.append({
-                    "id": p.track_id, 
-                    "name": p.name, 
-                    "state": p.state,
-                    "sitting_time": p.sitting_duration_clock, 
-                    "standing_time": p.standing_duration_clock, 
-                    "pitch": p.pitch,
-                    "session_limit": p.session_limit,
-                    "stand_requirement": p.stand_requirement,
-                    "screen_gaze_current": round(p.screen_gaze_accumulation_timer),
-                    "screen_gaze_max": p.screen_gaze_limit,
-                    "ocular_break_current": round(p.ocular_break_timer),
-                    "ocular_break_max": p.gaze_away_limit
+                    "id": tracked_person.track_id, 
+                    "name": tracked_person.name, 
+                    "state": tracked_person.state,
+                    "sitting_time": tracked_person.sitting_duration_clock, 
+                    "standing_time": tracked_person.standing_duration_clock, 
+                    "pitch": tracked_person.pitch,
+                    "session_limit": tracked_person.session_limit,
+                    "stand_requirement": tracked_person.stand_requirement,
+                    "screen_gaze_current": round(tracked_person.screen_gaze_accumulation_timer),
+                    "screen_gaze_max": tracked_person.screen_gaze_limit,
+                    "ocular_break_current": round(tracked_person.ocular_break_timer),
+                    "ocular_break_max": tracked_person.gaze_away_limit
                 })
         return jsonify(snapshot)
 
 @app.route('/api/profiles')
-def get_profiles():
+def get_profiles() -> Any:
+    """Returns all registered user profiles."""
     with state_mutex:
         profiles_list = []
         raw_profiles = db_conn.load_all_profiles()
@@ -64,13 +67,14 @@ def get_profiles():
                 "slouch_sensitivity": p["slouch_sensitivity"],
                 "session_limit": p["session_limit"],
                 "stand_requirement": p["stand_requirement"],
-                "screen_gaze_limit": p.get("screen_gaze_limit", 1200),
-                "ocular_break_duration": p.get("ocular_break_duration", 20)
+                "screen_gaze_limit": tracked_person.get("screen_gaze_limit", 1200),
+                "ocular_break_duration": tracked_person.get("ocular_break_duration", 20)
             })
         return jsonify(profiles_list)
 
 @app.route('/api/profile/create', methods=['POST'])
-def create_profile_endpoint():
+def create_profile_endpoint() -> Any:
+    """Creates a new biometric user profile from an unregistered target."""
     data = request.get_json()
     name = data.get("name")
     if not name:
@@ -78,8 +82,8 @@ def create_profile_endpoint():
         
     with state_mutex:
         person_to_register = None
-        for p in health_evaluator.tracked_persons.values():
-            if p.name == "Unknown (Ready for Registration)" or "Unknown" in p.name:
+        for tracked_person in health_evaluator.tracked_persons.values():
+            if tracked_person.name == "Unknown (Ready for Registration)" or "Unknown" in tracked_person.name:
                 person_to_register = p
                 break
                 
@@ -99,7 +103,8 @@ def create_profile_endpoint():
             return jsonify({"error": f"Database insertion failed: {str(e)}"}), 500
 
 @app.route('/api/profile/update', methods=['POST'])
-def update_profile():
+def update_profile() -> Any:
+    """Updates configuration thresholds for an existing user."""
     data = request.get_json()
     db_conn.update_profile(
         data["name"], data["slouch_sensitivity"], data["session_limit"], data["stand_requirement"], data["screen_gaze_limit"], data["ocular_break_duration"]
@@ -108,7 +113,8 @@ def update_profile():
     return jsonify({"message": "Synchronized profile configurations successfully."})
 
 @app.route('/api/profile/delete', methods=['POST'])
-def delete_profile_endpoint():
+def delete_profile_endpoint() -> Any:
+    """Deletes an existing user profile."""
     data = request.get_json()
     name = data.get("name")
     if not name:
@@ -116,16 +122,17 @@ def delete_profile_endpoint():
     with state_mutex:
         health_evaluator.system_was_manually_cleared = True
         db_conn.delete_profile(name)
-        for p in health_evaluator.tracked_persons.values():
-            if p.name == name:
-                p.name = "Unknown"
-                p.state = "Unregistered Guest"
-                p.state_history_window.clear()
+        for tracked_person in health_evaluator.tracked_persons.values():
+            if tracked_person.name == name:
+                tracked_person.name = "Unknown"
+                tracked_person.state = "Unregistered Guest"
+                tracked_person.state_history_window.clear()
         health_evaluator.sync_profiles()
         return jsonify({"message": f"Successfully deleted user profile for {name}."})
 
 @app.route('/api/profile/recalibrate', methods=['POST'])
-def trigger_manual_recalibration():
+def trigger_manual_recalibration() -> Any:
+    """Triggers an explicit manual recalibration of the primary anchor."""
     with state_mutex:
         health_evaluator.manual_recalibration_requested = True
     return jsonify({"status": "success", "message": "Manual recalibration cycle triggered successfully."})
@@ -155,11 +162,11 @@ def master_inference_loop():
         annotated_layer = frame.copy()
         
         with state_mutex:
-            for p in health_evaluator.tracked_persons.values():
-                x1, y1, x2, y2 = int(p.box[0]), int(p.box[1]), int(p.box[2]), int(p.box[3])
-                color = (0, 255, 135) if p.is_verified or p.name != "Unknown" else (67, 159, 255)
+            for tracked_person in health_evaluator.tracked_persons.values():
+                x1, y1, x2, y2 = int(tracked_person.box[0]), int(tracked_person.box[1]), int(tracked_person.box[2]), int(tracked_person.box[3])
+                color = (0, 255, 135) if tracked_person.is_verified or tracked_person.name != "Unknown" else (67, 159, 255)
                 cv2.rectangle(annotated_layer, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(annotated_layer, f"{p.name} [{p.state}]", (x1, y1-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.putText(annotated_layer, f"{tracked_person.name} [{tracked_person.state}]", (x1, y1-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             latest_frame_buffer = annotated_layer
 
 if __name__ == "__main__":

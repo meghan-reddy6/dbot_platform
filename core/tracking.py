@@ -2,6 +2,7 @@ import time
 import logging
 import threading
 import numpy as np
+from typing import Any, Dict, List, Optional, Tuple, Set
 from collections import deque, Counter
 
 logger = logging.getLogger("DeskBotV3.Tracking")
@@ -15,7 +16,11 @@ except ImportError:
     print("[!] pyttsx3 not installed. Voice alerts will be muted.")
 
 class Person:
-    def __init__(self, track_id, embedding, box):
+    """
+    Represents a tracked human target containing bounding box logic, biometric identity,
+    and temporal state logic for posture evaluation.
+    """
+    def __init__(self, track_id: int, embedding: np.ndarray, box: list) -> None:
         self.track_id = track_id
         self.embedding = embedding
         self.box = box
@@ -44,7 +49,7 @@ class Person:
         self.gaze_away_clock = 0.0
         self.slouch_timer = 0.0
         
-        self.posture_deficit_debounce_timer = 0.0
+        self.sustained_slouch_debounce_timer = 0.0
         self.tracking_active_debounce_timer = 0.0
         
         self.ocular_break_announced = False
@@ -59,11 +64,11 @@ class Person:
         self.biometric_cutoff = 0.55
         
         self.baseline_torso_ratio = 0.0     
-        self.baseline_pitch = 0.0           
+        self.calibrated_baseline_neck_pitch = 0.0           
         self.baseline_shoulder_y = 0.0      
         self.calibration_accumulator = []  
         self.calibration_start = None
-        self.consensus_counter = 0
+        self.biometric_consensus_frame_counter = 0
         self.calibration_announced = False  
         self.last_log_time = 0.0            
         
@@ -80,7 +85,11 @@ class Person:
         return ((self.box[0] + self.box[2])/2, (self.box[1] + self.box[3])/2)
 
 class TrackerEngine:
-    def __init__(self, inference_engine, db_manager):
+    """
+    Primary tracking and biometric anchor engine. Orchestrates spatial filtering (IoU),
+    facial recognition persistence, and single-target posture evaluations.
+    """
+    def __init__(self, inference_engine: Any, db_manager: Any) -> None:
         self.tracked_persons = {}
         self.track_counter = 0
         self.db_manager = db_manager
@@ -95,7 +104,8 @@ class TrackerEngine:
         self.system_was_manually_cleared = False
         self.manual_recalibration_requested = False
 
-    def sync_profiles(self):
+    def sync_profiles(self) -> None:
+        """Synchronizes internal trackers with database thresholds."""
         with self.mutex:
             self.profiles = self.db_manager.load_all_profiles()
             for person in self.tracked_persons.values():
@@ -104,13 +114,14 @@ class TrackerEngine:
                     person.slouch_sensitivity = p["slouch_sensitivity"]
                     person.session_limit = p["session_limit"]
                     person.stand_requirement = p["stand_requirement"]
-                    person.gaze_away_limit = float(p.get("ocular_break_duration", 20.0))
-                    person.screen_gaze_limit = float(p.get("screen_gaze_limit", 1200.0))
-                    person.biometric_cutoff = p.get("biometric_cutoff", 0.55)
+                    person.gaze_away_limit = float(tracked_person.get("ocular_break_duration", 20.0))
+                    person.screen_gaze_limit = float(tracked_person.get("screen_gaze_limit", 1200.0))
+                    person.biometric_cutoff = tracked_person.get("biometric_cutoff", 0.55)
 
-    def _match_profile(self, embedding, spatial_penalty=0.0):
+    def _match_profile(self, embedding: np.ndarray, spatial_penalty: float = 0.0) -> Tuple[Optional[str], float]:
+        """Compares target embedding against registered database profiles."""
         best_match = None
-        best_sim = -1.0
+        best_normalized_cosine_similarity = -1.0
         norm_embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
         for name, profile in self.profiles.items():
             db_emb = profile["embedding"]
@@ -119,12 +130,13 @@ class TrackerEngine:
             
             penalized_similarity = cosine_similarity - (spatial_penalty * 0.3)
             cutoff = 0.80
-            if penalized_similarity >= cutoff and penalized_similarity > best_sim:
-                best_sim = penalized_similarity
+            if penalized_similarity >= cutoff and penalized_similarity > best_normalized_cosine_similarity:
+                best_normalized_cosine_similarity = penalized_similarity
                 best_match = name
-        return best_match, best_sim
+        return best_match, best_normalized_cosine_similarity
 
-    def _dispatch_voice(self, text):
+    def _dispatch_voice(self, text: str) -> None:
+        """Dispatches an asynchronous voice alert."""
         now = time.time()
         if now - self.last_voice_alert > 10.0:
             self.last_voice_alert = now
@@ -141,10 +153,14 @@ class TrackerEngine:
                 except Exception: pass
             threading.Thread(target=voice_worker, daemon=True).start()
 
-    def _evaluate_single_target_health(self, person, pose, current_ratio, dt, current_time, frame_shape):
+    def _evaluate_single_target_health(self, person: "Person", pose: dict, current_ratio: float, dt: float, current_time: float, frame_shape: tuple) -> None:
+        """
+        Evaluates frame-level posture thresholds against calibrated baselines.
+        Applies strict temporal hysteresis to prevent state chatter.
+        """
         if person.name.startswith("Unknown") or self.primary_user_track_id is None:
             person.state = "Unregistered Target"
-            person.posture_deficit_debounce_timer = 0.0
+            person.sustained_slouch_debounce_timer = 0.0
             person.tracking_active_debounce_timer = 0.0
             return
 
@@ -185,7 +201,7 @@ class TrackerEngine:
             
             if elapsed_calib >= 3.0:
                 if person.calibration_accumulator:
-                    person.baseline_pitch = float(np.mean([i[0] for i in person.calibration_accumulator]))
+                    person.calibrated_baseline_neck_pitch = float(np.mean([i[0] for i in person.calibration_accumulator]))
                     person.baseline_torso_ratio = float(np.mean([i[1] for i in person.calibration_accumulator]))
                     person.baseline_shoulder_y = float(np.mean([i[2] for i in person.calibration_accumulator]))
                 person.calibration_accumulator = []
@@ -204,22 +220,22 @@ class TrackerEngine:
             shoulder_width = np.abs(pose['right_shoulder'].x - pose['left_shoulder'].x)
             shoulder_center_y = (pose['left_shoulder'].y + pose['right_shoulder'].y) / 2.0
             
-            pitch_val = person.smoothed_pitch if person.smoothed_pitch is not None else person.pitch
-            ratio_val = person.smoothed_ratio if person.smoothed_ratio is not None else current_ratio
+            current_neck_pitch_angle = person.smoothed_pitch if person.smoothed_pitch is not None else person.pitch
+            current_torso_depth_ratio = person.smoothed_ratio if person.smoothed_ratio is not None else current_ratio
 
-            relative_slouch = pitch_val - person.baseline_pitch
+            relative_slouch = current_neck_pitch_angle - person.calibrated_baseline_neck_pitch
             
             # Strict Directional Hysteresis Lock (Stop State Chatter)
             if person.state == "Posture Deficit Alert":
                 # EXIT TRIGGER: Must sit fully upright to clear alert
-                is_fully_upright = (ratio_val >= person.baseline_torso_ratio * 0.98) and (relative_slouch <= person.slouch_sensitivity * 0.40)
+                is_fully_upright = (current_torso_depth_ratio >= person.baseline_torso_ratio * 0.98) and (relative_slouch <= person.slouch_sensitivity * 0.40)
                 is_slouching = not is_fully_upright
             else:
                 # ENTRY TRIGGER: Tightened slouch check
-                is_slouching = (ratio_val < (person.baseline_torso_ratio * 0.90)) or (relative_slouch > person.slouch_sensitivity * 0.70)
+                is_slouching = (current_torso_depth_ratio < (person.baseline_torso_ratio * 0.90)) or (relative_slouch > person.slouch_sensitivity * 0.70)
             
             normalized_height_delta = (person.baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
-            is_standing = (normalized_height_delta > 0.65) or (ratio_val > (person.baseline_torso_ratio * 1.65))
+            is_standing = (normalized_height_delta > 0.65) or (current_torso_depth_ratio > (person.baseline_torso_ratio * 1.65))
             
             is_pinned_to_ceiling = (person.box[1] <= frame_shape[0] * 0.05)
             nose_missing = (pose['nose'].y <= 0.01)
@@ -250,18 +266,18 @@ class TrackerEngine:
                 filtered_candidate = frame_candidate
                 
             if filtered_candidate == "Posture Deficit Alert":
-                person.posture_deficit_debounce_timer += dt
+                person.sustained_slouch_debounce_timer += dt
                 person.tracking_active_debounce_timer = 0.0
-                if person.posture_deficit_debounce_timer >= 2.5:
+                if person.sustained_slouch_debounce_timer >= 2.5:
                     person.state = "Posture Deficit Alert"
             elif filtered_candidate == "Tracking Active":
                 person.tracking_active_debounce_timer += dt
-                person.posture_deficit_debounce_timer = 0.0
+                person.sustained_slouch_debounce_timer = 0.0
                 if person.tracking_active_debounce_timer >= 1.5:
                     person.state = "Tracking Active"
             elif filtered_candidate == "Standing":
                 person.state = "Standing"
-                person.posture_deficit_debounce_timer = 0.0
+                person.sustained_slouch_debounce_timer = 0.0
                 person.tracking_active_debounce_timer = 0.0
 
             # Wellness Timer Overrides
@@ -329,10 +345,12 @@ class TrackerEngine:
                 if fast_frames > 0:
                     person.fast_relatch_frames = fast_frames - 1
 
-    def update(self, frame, detections, frame_shape):
+    def update(self, frame: np.ndarray, detections: list, frame_shape: tuple) -> Any:
+        """Pipeline entry point for the Multi-Object Tracker."""
         return self.process_frame_mot(frame, detections, frame_shape)
 
-    def _calculate_iou(self, boxA, boxB):
+    def _calculate_iou(self, boxA: list, boxB: list) -> float:
+        """Calculates Intersection over Union for bounding box suppression."""
         xA = max(boxA[0], boxB[0])
         yA = max(boxA[1], boxB[1])
         xB = min(boxA[2], boxB[2])
@@ -347,27 +365,31 @@ class TrackerEngine:
         iou = interArea / float(boxAArea + boxBArea - interArea)
         return iou
 
-    def process_frame_mot(self, frame, detections, frame_shape):
+    def process_frame_mot(self, frame: np.ndarray, detections: list, frame_shape: tuple) -> Any:
+        """
+        Main tracking loop. Enforces Bystander Blindness, assigns tracking IDs,
+        and buffers session drops.
+        """
         is_database_empty = (len(self.profiles) == 0)
         current_face_crop = None
         current_time = time.time()
         h, w = frame_shape[:2]
         active_ids = set()
         
-        assigned_identities = set()
+        frame_level_locked_identities = set()
         
         ranked_detections = []
         for det in detections:
             box = det["box"]
             centroid_x = (box[0] + box[2]) / 2.0
             shoulder_width = np.abs(det["pose"]["left_shoulder"].x - det["pose"]["right_shoulder"].x)
-            score = shoulder_width - (np.abs(centroid_x - w/2) / w)
-            ranked_detections.append((score, det))
+            normalized_cosine_similarity = shoulder_width - (np.abs(centroid_x - w/2) / w)
+            ranked_detections.append((normalized_cosine_similarity, det))
         ranked_detections.sort(key=lambda x: x[0], reverse=True)
         
         filtered_ranked_detections = []
         for det_tup in ranked_detections:
-            score, det = det_tup
+            normalized_cosine_similarity, det = det_tup
             box = det["box"]
             is_duplicate = False
             for f_score, f_det in filtered_ranked_detections:
@@ -383,11 +405,11 @@ class TrackerEngine:
             primary_det = ranked_detections[0][1] if ranked_detections else None
             
             active_ids = set()
-            for score, det in ranked_detections:
+            for normalized_cosine_similarity, det in ranked_detections:
                 det["matched_person"] = None
                 
             # PASS 1 (Persistent Track Lock): Loop through existing, active tracks (known names)
-            for score, det in ranked_detections:
+            for normalized_cosine_similarity, det in ranked_detections:
                 embedding = det["embedding"]
                 box = det["box"]
                 pose = det["pose"]
@@ -397,8 +419,8 @@ class TrackerEngine:
                 matched_person = None
                 best_cost = float('inf')
                 
-                for tid, person in self.tracked_persons.items():
-                    if person.name == "Unknown" or tid in active_ids:
+                for track_id, person in self.tracked_persons.items():
+                    if person.name == "Unknown" or track_id in active_ids:
                         continue
                         
                     tc = person.get_centroid()
@@ -424,11 +446,11 @@ class TrackerEngine:
                         
                 if matched_person is not None:
                     det["matched_person"] = matched_person
-                    assigned_identities.add(matched_person.name)
+                    frame_level_locked_identities.add(matched_person.name)
                     active_ids.add(matched_person.track_id)
 
             # PASS 2 (New Detection Evaluation & Track Updates)
-            for score, det in ranked_detections:
+            for normalized_cosine_similarity, det in ranked_detections:
                 matched_person = det["matched_person"]
                 is_primary = (det is primary_det)
                 
@@ -440,8 +462,8 @@ class TrackerEngine:
                 
                 if matched_person is None:
                     best_cost = float('inf')
-                    for tid, person in self.tracked_persons.items():
-                        if person.name != "Unknown" or tid in active_ids:
+                    for track_id, person in self.tracked_persons.items():
+                        if person.name != "Unknown" or track_id in active_ids:
                             continue
                             
                         tc = person.get_centroid()
@@ -459,11 +481,11 @@ class TrackerEngine:
                     if matched_person is None:
                         dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
                         spatial_penalty = dist_from_center / (w + 1e-6)
-                        profile_name, profile_sim = self._match_profile(embedding, spatial_penalty)
+                        profile_name, normalized_cosine_similarity = self._match_profile(embedding, spatial_penalty)
                         
                         matched_coasting_person = None
-                        if profile_name and profile_name not in assigned_identities:
-                            for tid, person in self.tracked_persons.items():
+                        if profile_name and profile_name not in frame_level_locked_identities:
+                            for track_id, person in self.tracked_persons.items():
                                 if person.name == profile_name and person.state == "Searching / Re-acquiring":
                                     matched_coasting_person = person; break
                                     
@@ -474,7 +496,7 @@ class TrackerEngine:
                             matched_person.last_update = current_time
                             matched_person.recovery_calibration_start = current_time
                             matched_person.recovery_accumulator = []
-                            assigned_identities.add(profile_name)
+                            frame_level_locked_identities.add(profile_name)
                         else:
                             track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_counter}"
                             self.track_counter += 1
@@ -548,28 +570,28 @@ class TrackerEngine:
                             print(f"[BIOMETRICS] Rejected face crop: Unverifiable / Too Distant ({crop_w}x{crop_h})")
                             matched_person.name = "Unknown / Bystander"
                             matched_person.state = "Secondary Bystander"
-                            matched_person.consensus_counter = 0
+                            matched_person.biometric_consensus_frame_counter = 0
                             continue
                             
                         dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
                         spatial_penalty = dist_from_center / (w + 1e-6)
-                        profile_name, profile_sim = self._match_profile(embedding, spatial_penalty)
+                        profile_name, normalized_cosine_similarity = self._match_profile(embedding, spatial_penalty)
                         
-                        if profile_name and profile_sim >= 0.86:
-                            matched_person.consensus_counter += 1
-                            print(f"[BIOMETRICS] Scanning... Consensus {matched_person.consensus_counter}/15 (Sim: {profile_sim:.2f})")
+                        if profile_name and normalized_cosine_similarity >= 0.86:
+                            matched_person.biometric_consensus_frame_counter += 1
+                            print(f"[BIOMETRICS] Scanning... Consensus {matched_person.biometric_consensus_frame_counter}/15 (Sim: {normalized_cosine_similarity:.2f})")
                             
-                            if matched_person.consensus_counter >= 15:
+                            if matched_person.biometric_consensus_frame_counter >= 15:
                                 self.primary_user_track_id = matched_person.track_id
                                 matched_person.name = profile_name
                                 print(f"[BIOMETRICS] Anchor Locked: {matched_person.name}")
                                 
-                                p_profile = self.profiles[profile_name]
-                                matched_person.slouch_sensitivity = p_profile["slouch_sensitivity"]
-                                matched_person.session_limit = p_profile["session_limit"]
-                                matched_person.stand_requirement = p_profile["stand_requirement"]
-                                matched_person.gaze_away_limit = float(p_profile.get("gaze_away_limit", 20.0))
-                                matched_person.biometric_cutoff = p_profile.get("biometric_cutoff", 0.55)
+                                profile_config_map = self.profiles[profile_name]
+                                matched_person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
+                                matched_person.session_limit = profile_config_map["session_limit"]
+                                matched_person.stand_requirement = profile_config_map["stand_requirement"]
+                                matched_person.gaze_away_limit = float(profile_config_map.get("gaze_away_limit", 20.0))
+                                matched_person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
                                 
                                 if not matched_person.is_posture_calibrated:
                                     matched_person.state = "Calibrating"
@@ -582,7 +604,7 @@ class TrackerEngine:
                                 continue
                         else:
                             # Did not meet confidence or no profile found
-                            matched_person.consensus_counter = 0
+                            matched_person.biometric_consensus_frame_counter = 0
                             matched_person.name = "Unknown / Bystander"
                             matched_person.state = "Secondary Bystander"
                             continue
@@ -616,12 +638,12 @@ class TrackerEngine:
                 else:
                     self.primary_user_lost_frames = 0
                                     
-            for tid, person in list(self.tracked_persons.items()):
-                if tid not in active_ids:
+            for track_id, person in list(self.tracked_persons.items()):
+                if track_id not in active_ids:
                     if current_time - person.last_seen > 10.0:
                         if person.name != "Unknown" and person.name != "Unknown / Bystander":
                             self.db_manager.log_session_metrics(person.name, "session_ended", person.sitting_duration_clock)
-                        del self.tracked_persons[tid]
+                        del self.tracked_persons[track_id]
                     else:
                         if person.state not in ["Calibrating", "Secondary Bystander"]:
                             person.state = "Searching / Re-acquiring"
