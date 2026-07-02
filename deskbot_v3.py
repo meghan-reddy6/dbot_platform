@@ -13,7 +13,6 @@ flask.cli.show_server_banner = lambda *args: None
 
 from database.crud import DatabaseManager
 from core.ingestion import DynamicCameraIngestion
-from core.inference import AIInferenceEngine
 from core.tracking import TrackerEngine, state_mutex
 
 logging.basicConfig(level=logging.INFO)
@@ -21,8 +20,7 @@ logger = logging.getLogger("DeskBotV3.MainOrchestrator")
 
 app = Flask(__name__)
 db_conn = DatabaseManager()
-inference_engine = AIInferenceEngine()
-health_evaluator = TrackerEngine(inference_engine, db_conn)
+health_evaluator = TrackerEngine(db_conn)
 camera_bridge = DynamicCameraIngestion()
 
 latest_frame_buffer = None
@@ -156,9 +154,8 @@ def master_inference_loop():
             time.sleep(0.01)
             continue
         h, w, _ = frame.shape
-        detections = inference_engine.run_inference(frame)
         
-        health_evaluator.update(frame, detections, frame.shape)
+        health_evaluator.process_frame_mot(frame, frame.shape)
         annotated_layer = frame.copy()
         
         with state_mutex:
