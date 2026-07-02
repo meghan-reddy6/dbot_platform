@@ -1,68 +1,62 @@
-# DeskBot V3 - Single-Target Biometric Anchor System
+# DeskBot V3 - Smart Ergonomic Health Pipeline
 
-Welcome to the **DeskBot V3** ecosystem. This project implements a high-performance, single-target biometric posture tracking pipeline designed exclusively to secure and monitor a single primary user while aggressively blinding out background bystanders.
+DeskBot V3 is an advanced, hardware-accelerated ergonomic monitoring system. It leverages a dynamic **Cross-Platform Multi-Model Cascading Pipeline** to track human posture, eye gaze, and workspace sessions in real time, automatically deploying local alerts for posture deficits.
 
----
+## Multi-Model Pipeline Data Flow
 
-## 🏗️ Architecture Overview
+The system employs a strictly gated, two-stage cascading inference pipeline to drastically reduce unnecessary computational overhead and protect system responsiveness.
 
-The DeskBot V3 tracking pipeline operates via a strict chronological data flow, moving raw frame pixels through layers of spatial filtering and biometric verification before generating posture telemetry.
+### Stage 1: Human Detection & Spatial Tracking (Always On)
+- **Model:** YOLOv8 Nano Pose (INT8)
+- **Frequency:** Frame-by-frame
+- **Function:** Extracts bounding boxes, 17-point skeletal keypoints, and spatial scale. Calculates real-time 3D head pose (pitch, yaw, roll) using Perspective-n-Point (PnP) geometry and extracts pupil vectors for gaze analysis. This stage provides 100% of the data required for persistent tracking (MOT) and health evaluations without invoking heavy ID models.
 
-1. **Object Detection**: The frame is processed to detect human bounding boxes.
-2. **IoU Spatial Filter**: If two bounding boxes overlap by > 40%, the smaller box is aggressively discarded to eliminate ghost tracking loops.
-3. **Biometric Consensus Lock**:
-   - The system scans the remaining bounding boxes and extracts facial embeddings.
-   - Using a strict L2-Normalized Cosine Similarity, the system requires a `normalized_cosine_similarity >= 0.86` for **15 consecutive frames**. 
-   - Upon successful verification, the engine locks onto the target as the **Primary Anchor** and permanently bypasses facial recognition to save compute.
-4. **Single-Target Posture Evaluation and Hysteresis**:
-   - The primary anchor undergoes rigorous geometric depth ratio mapping and neck pitch evaluations.
-   - Temporal buffers (Hysteresis) absorb pixel noise and micro-movements to ensure state transition alerts are perfectly stable.
+### Stage 2: Biometric Embeddings Vectorizer (Gated / Idle)
+- **Model:** Simulated 128-dimensional Facial Vectorizer (FP16/INT8)
+- **Frequency:** Strictly Gated (Idle by default)
+- **Function:** Generates a unique facial signature for the user. It is **strictly forbidden** from running frame-by-frame. It is only permitted to execute when the system detects an unassigned anchor (`self.primary_user_track_id is None`) or when the user intentionally triggers a manual recalibration request.
 
 ---
 
-## 🌟 System Core Features
+## Cross-Platform Execution Matrix
 
-### 1. Bystander Blindness
-If a coworker or family member walks into the camera frame behind you, the system forcefully clamps their track identity to `"Secondary Bystander"`. All posture physics calculations, facial crop routines, and temporal timers are strictly disabled for bystanders, guaranteeing zero CPU waste and zero data bleed into your health metrics.
+The `CrossPlatformInferenceManager` dynamically interrogates the host operating system upon instantiation and maps model execution to the optimal hardware accelerator using native SDK fallbacks. If a local proprietary backend (e.g., QNN or CoreML) is missing, it gracefully intercepts the `ImportError` and falls back to a mocked state or CPU execution.
 
-### 2. Temporal Track Persistence
-If the primary user momentarily leaves the camera frame, the system buffers the track loss. The memory pipeline is only flushed via an **Anti-Bleed Eviction** if the user is missing for `15` continuous frames, preventing minor occlusions (like covering your face or leaning out of view) from instantly breaking the session.
-
-### 3. Manual Recalibration Overrides
-Posture drift happens when you adjust your desk chair height. A `manual_recalibration_requested` override instantly breaks the biometric lock, flushes previous accumulator buffers, and forces a clean 3-second recalibration sweep without needing to restart the server.
-
----
-
-## 🚀 Quick-Start Deployment Guide
-
-To deploy the DeskBot V3 tracker, utilize the `uv` package manager in PowerShell:
-
-```powershell
-# 1. Clone the repository and navigate to the project root
-cd path/to/dbot
-
-# 2. Run the application utilizing UV (automatically resolves dependencies)
-uv run python deskbot_v3.py
-```
-*Note: The frontend dashboard is hosted via Flask at `http://localhost:5000`.*
+| Host Operating System | Architecture | Hardware Accelerator | Native Inference SDK | Provider / Target |
+| :--- | :--- | :--- | :--- | :--- |
+| **Linux (Qualcomm Rubik Pi)** | `aarch64` | Hexagon NPU | Qualcomm AI Engine Direct | `QNNExecutionProvider` (FP16 Burst) |
+| **Microsoft Windows** | `amd64` / `x86_64` | NVIDIA / AMD GPU | ONNX Runtime | `CUDAExecutionProvider` or `DmlExecutionProvider` |
+| **Apple macOS** | `arm64` | Apple Neural Engine (ANE) | CoreML / MPS | Native PyTorch MPS Hook |
 
 ---
 
-## 📖 Variable Glossary & State Matrix
+## Operational State Rules
 
-### State Matrix
-The `tracked_person.state` variable defines the exact lifecycle tier of the user:
+The tracker's state machine governs all posture and biometric logic to ensure a completely seamless and fail-safe user experience:
 
-| State | Trigger Condition |
-|-------|-------------------|
-| `Unregistered Target` | The user is actively tracked but matches no profiles. Health telemetry is halted. |
-| `Calibrating` | User is locked. Accumulating 3.0s of baseline ratio/pitch averages. |
-| `Tracking Active` | User is anchored and posture is within healthy `calibrated_baseline_neck_pitch` limits. |
-| `Posture Deficit Alert` | User has sustained a `>0.70` pitch drop or `<0.90` depth drop for `2.5s`. |
-| `Secondary Bystander` | Target is explicitly excluded from the Biometric Anchor loop. |
+1. **Single-Target Biometric Anchor Lock:**
+   Once a user satisfies the 15-frame biometric consensus threshold (cosine similarity > cutoff limit), they are "locked" as the primary anchor (`self.primary_user_track_id`).
+   
+2. **Absolute Bystander Blindness:**
+   All secondary skeletal detections in the frame are categorized as `Secondary Bystander` and are entirely ignored. Their posture is never evaluated, and the heavy Biometric ID model will never scan them as long as the primary anchor is locked.
 
-### Glossary of Key Internal Variables
-* `biometric_consensus_frame_counter`: Frame accumulator required (15) to achieve anchor lock.
-* `sustained_slouch_debounce_timer`: Floating-point clock required to trigger (2.5s) or clear (1.5s) alerts.
-* `current_torso_depth_ratio`: The live depth approximation calculation of the tracked skeleton.
-* `calibrated_baseline_neck_pitch`: The 3-second temporal average established during `Calibrating`.
+3. **Manual Recalibration Override:**
+   A manual recalibration event temporarily unlocks the biometric gate, flags `self.manual_recalibration_requested = True`, and bypasses historical spatial memory to force a fresh anchor lock and posture baseline.
+
+4. **15-Frame Consensus Gateway & Unregistered Short-Circuit:**
+   New users ("Unknown") are subjected to a 15-frame rolling biometric similarity consensus. If they fail to match an established profile, their state is locked to `Unregistered Guest` or `Secondary Bystander`. In these states, **all posture tracking, voice alerts, and gaze checks are permanently short-circuited**. The system will not process them until they are officially registered via the Dashboard API.
+
+---
+
+## Getting Started
+
+1. **Install Requirements:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Run Server:**
+   ```bash
+   python deskbot_v3.py
+   ```
+3. **Access Dashboard:**
+   Navigate to `http://localhost:5000` to view the live analytics layer and register a user profile.

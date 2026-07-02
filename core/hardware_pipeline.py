@@ -7,9 +7,25 @@ import math
 from typing import Any, Dict, List, Tuple
 
 class Keypoint:
+    """
+    Represents a normalized 2D coordinate for skeletal landmarks.
+
+    Attributes:
+        x (float): The normalized X coordinate (0.0 to 1.0).
+        y (float): The normalized Y coordinate (0.0 to 1.0).
+    """
     def __init__(self, x_pixel: float, y_pixel: float, w: int, h: int) -> None:
-        self.x = float(x_pixel / w)
-        self.y = float(y_pixel / h)
+        """
+        Initializes a new Keypoint instance.
+
+        Args:
+            x_pixel (float): The raw pixel coordinate on the X axis.
+            y_pixel (float): The raw pixel coordinate on the Y axis.
+            w (int): The width of the source frame in pixels.
+            h (int): The height of the source frame in pixels.
+        """
+        self.x: float = float(x_pixel / w)
+        self.y: float = float(y_pixel / h)
 
 class CrossPlatformInferenceManager:
     """
@@ -17,19 +33,28 @@ class CrossPlatformInferenceManager:
     for cascading Stage 1 (Human Detection) and Stage 2 (Biometric Embedding).
     """
     def __init__(self) -> None:
-        self.os_type = platform.system()
-        self.arch_type = platform.machine().lower()
-        self.stage1_model = None
-        self.stage2_model = None
+        """
+        Initializes the CrossPlatformInferenceManager instance.
+        Evaluates system architecture and attempts to load accelerated inference backends.
+        """
+        self.os_type: str = platform.system()
+        self.arch_type: str = platform.machine().lower()
+        self.stage1_model: Any = None
+        self.stage2_model: Any = None
         
-        self.last_pitch = 0.0
-        self.last_yaw = 0.0
-        self.last_roll = 0.0
+        self.last_pitch: float = 0.0
+        self.last_yaw: float = 0.0
+        self.last_roll: float = 0.0
         
         print(f"[*] CrossPlatformInferenceManager Boot. OS: {self.os_type} | Arch: {self.arch_type}")
         self._initialize_hardware_backends()
 
     def _initialize_hardware_backends(self) -> None:
+        """
+        Detects the current host operating system and attempts to initialize the appropriate 
+        hardware acceleration frameworks. Includes try/except fallbacks to prevent 
+        ImportError exceptions if local libraries are unavailable.
+        """
         # BRANCH A: Qualcomm Rubik Pi / Linux aarch64 (Hexagon NPU via QNN)
         if self.os_type == "Linux" and "aarch64" in self.arch_type:
             print("[*] Target: Qualcomm Rubik Pi. Initializing QNN Hexagon NPU Backend...")
@@ -104,7 +129,17 @@ class CrossPlatformInferenceManager:
             self.stage1_model = None
 
     def _solve_pnp(self, landmarks_5: np.ndarray, frame_shape: Tuple[int, int]) -> Tuple[float, float, float]:
-        """Solves 3D head posture matrix."""
+        """
+        Calculates the 3D head pose (pitch, yaw, roll) using 5 facial landmarks and the 
+        Perspective-n-Point (PnP) algorithm.
+
+        Args:
+            landmarks_5 (np.ndarray): Array containing 5 facial (x,y) points.
+            frame_shape (Tuple[int, int]): Dimensions of the source frame (height, width).
+
+        Returns:
+            Tuple[float, float, float]: A tuple representing (pitch, yaw, roll) in degrees.
+        """
         h, w = frame_shape
         focal_length = w
         center = (w / 2, h / 2)
@@ -120,9 +155,14 @@ class CrossPlatformInferenceManager:
             (30.0, -125.0, -30.0),       # Right Eye
             (-150.0, -150.0, -125.0),    # Left Ear
             (150.0, -150.0, -125.0)      # Right Ear
-        ])
+        ], dtype="double")
+        
+        rvec_guess = np.zeros((3, 1), dtype=np.float64)
+        tvec_guess = np.array([[0.0], [0.0], [focal_length]], dtype=np.float64)
+        
         success, rotation_vector, translation_vector = cv2.solvePnP(
-            model_points, landmarks_5, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE
+            model_points, landmarks_5, camera_matrix, dist_coeffs,
+            rvec_guess, tvec_guess, useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE
         )
         if not success:
             return self.last_pitch, self.last_yaw, self.last_roll
@@ -139,13 +179,50 @@ class CrossPlatformInferenceManager:
         return pitch, yaw, roll
 
     def extract_pupil_gaze(self, frame: np.ndarray, left_eye: np.ndarray, right_eye: np.ndarray) -> Tuple[float, bool]:
-        """Simple pupil gaze extraction stub."""
-        return 0.0, False
+        """Calculates pupil centroid vector to determine if user is looking away."""
+        try:
+            ex, ey = int(left_eye[0]), int(left_eye[1])
+            eye_dist = np.linalg.norm(np.array(left_eye) - np.array(right_eye))
+            roi_size = max(10, int(eye_dist * 0.25))
+            
+            h, w = frame.shape[:2]
+            y1, y2 = max(0, ey - roi_size), min(h, ey + roi_size)
+            x1, x2 = max(0, ex - roi_size), min(w, ex + roi_size)
+            
+            eye_roi = frame[y1:y2, x1:x2]
+            if eye_roi.size == 0:
+                return 0.0, False
+                
+            gray_eye = cv2.cvtColor(eye_roi, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray_eye, 50, 255, cv2.THRESH_BINARY_INV)
+            
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                c = max(contours, key=cv2.contourArea)
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    eye_width = roi_size * 2
+                    eye_center_x = roi_size
+                    gaze_x = (cx - eye_center_x) / (eye_width / 2.0)
+                    is_looking_away = abs(gaze_x) > 0.22
+                    return gaze_x, is_looking_away
+                    
+            return 0.0, False
+        except Exception:
+            return 0.0, False
 
     def execute_stage1_detector(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Stage 1: Hardware-Accelerated Human Bounding Box & Landmark Detection.
-        Executed on every incoming frame.
+        Executes Stage 1 (Human Detection) on the incoming frame.
+        Identifies bounding boxes, keypoints, and calculates basic spatial properties.
+
+        Args:
+            frame (np.ndarray): The raw BGR frame from the ingestion pipeline.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries containing detection data including 
+            bounding boxes, keypoints, and cropped facial regions of interest.
         """
         h, w = frame.shape[:2]
         detections = []
@@ -213,9 +290,14 @@ class CrossPlatformInferenceManager:
 
     def execute_stage2_biometrics(self, face_crop: np.ndarray) -> np.ndarray:
         """
-        Stage 2: Heavy Identification Model.
-        Only executed when Biometric Anchor is lost or during explicit manual recalibration.
-        Converts the cropped facial region into a 128-dimensional embedding.
+        Executes Stage 2 (Biometric Embedding) to generate a unique facial signature.
+        This heavy identification model is strictly gated and should only run when requested.
+
+        Args:
+            face_crop (np.ndarray): A cropped BGR image of the target's face.
+
+        Returns:
+            np.ndarray: A 128-dimensional normalized facial embedding vector.
         """
         if face_crop is None or face_crop.size == 0:
             return np.zeros(128, dtype=np.float32)

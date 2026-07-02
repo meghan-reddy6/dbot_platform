@@ -475,31 +475,12 @@ class TrackerEngine:
                             best_cost = cost; matched_person = person
                             
                     if matched_person is None:
-                        embedding = det["embedding"]
-                        dist_from_center = np.linalg.norm(np.array(det_centroid) - np.array([w/2, h/2]))
-                        spatial_penalty = dist_from_center / (w + 1e-6)
-                        profile_name, normalized_cosine_similarity = self._match_profile(embedding, spatial_penalty)
-                        
-                        matched_coasting_person = None
-                        if profile_name and profile_name not in frame_level_locked_identities:
-                            for track_id, person in self.tracked_persons.items():
-                                if person.name == profile_name and person.state == "Searching / Re-acquiring":
-                                    matched_coasting_person = person; break
-                                    
-                        if matched_coasting_person is not None:
-                            matched_person = matched_coasting_person
-                            matched_person.state = "Tracking Active"
-                            matched_person.last_seen = current_time
-                            matched_person.last_update = current_time
-                            matched_person.recovery_calibration_start = current_time
-                            matched_person.recovery_accumulator = []
-                            frame_level_locked_identities.add(profile_name)
-                        else:
-                            track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_id_counter}"
-                            self.track_id_counter += 1
-                            matched_person = Person(track_hash, embedding, box)
-                            matched_person.pose = pose
-                            self.tracked_persons[track_hash] = matched_person
+                        track_hash = f"Person_hash_{int(current_time * 1000)}_{self.track_id_counter}"
+                        self.track_id_counter += 1
+                        dummy_embedding = np.zeros(128, dtype=np.float32)
+                        matched_person = Person(track_hash, dummy_embedding, box)
+                        matched_person.pose = pose
+                        self.tracked_persons[track_hash] = matched_person
                     
                     active_ids.add(matched_person.track_id)
                     
@@ -534,6 +515,8 @@ class TrackerEngine:
                 
                 if is_database_empty:
                     matched_person.name = "Unknown (Ready for Registration)"
+                    if np.all(matched_person.embedding == 0):
+                        matched_person.embedding = self.inference_manager.execute_stage2_biometrics(det["roi_frame"])
                     if matched_person.state in ["Unregistered Guest", "Secondary Bystander", "Searching / Re-acquiring"]:
                         if not matched_person.is_posture_calibrated:
                             matched_person.state = "Calibrating"
