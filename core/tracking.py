@@ -101,6 +101,7 @@ class TrackerEngine:
         
         self.inference_manager = CrossPlatformInferenceManager()
         
+        self.historical_users = {}
         self.tracked_persons = {}
         self.track_id_counter = 0
         self.frame_count = 0
@@ -558,32 +559,49 @@ class TrackerEngine:
                             
                             validated_profile_name, calculated_similarity = self._match_profile(embedding, spatial_penalty)
                             
-                            if validated_profile_name is None:
+                            if validated_profile_name is not None and validated_profile_name in self.historical_users:
+                                old_person = self.historical_users[validated_profile_name]
+                                old_person.track_id = matched_person.track_id
+                                old_person.box = matched_person.box
+                                old_person.pose = matched_person.pose
+                                old_person.last_seen = current_time
+                                old_person.last_update = current_time
+                                self.tracked_persons[matched_person.track_id] = old_person
+                                matched_person = old_person
+                                
+                                self.primary_user_track_id = matched_person.track_id
+                                self.current_authenticated_user = validated_profile_name
+                                matched_person.name = validated_profile_name
+                            elif validated_profile_name is None:
                                 matched_person.biometric_consensus_frame_counter = 0
                                 matched_person.name = "Unknown / Bystander"
-                                matched_person.state = "Secondary Bystander"
-                                continue
-                                
-                            matched_person.biometric_consensus_frame_counter += 1
-                            if matched_person.biometric_consensus_frame_counter >= 15:
-                                self.primary_user_track_id = matched_person.track_id
-                                matched_person.name = validated_profile_name
-                                profile_config_map = self.profiles[validated_profile_name]
-                                matched_person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
-                                matched_person.session_limit = profile_config_map["session_limit"]
-                                matched_person.stand_requirement = profile_config_map["stand_requirement"]
-                                matched_person.gaze_away_limit = float(profile_config_map.get("gaze_away_limit", 20.0))
-                                matched_person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
-                                
-                                if not matched_person.is_posture_calibrated:
-                                    matched_person.state = "Calibrating"
+                                matched_person.state = "Calibrating"
+                                if matched_person.name == "Unknown / Bystander":
+                                    matched_person.is_posture_calibrated = False
                                     matched_person.calibration_start = current_time
                                     matched_person.calibration_accumulator = []
-                                    matched_person.calibration_announced = False
-                            else:
-                                matched_person.name = "Unknown"
-                                matched_person.state = "Unregistered Guest"
                                 continue
+                            else:
+                                matched_person.biometric_consensus_frame_counter += 1
+                                if matched_person.biometric_consensus_frame_counter >= 15:
+                                    self.primary_user_track_id = matched_person.track_id
+                                    matched_person.name = validated_profile_name
+                                    profile_config_map = self.profiles[validated_profile_name]
+                                    matched_person.slouch_sensitivity = profile_config_map["slouch_sensitivity"]
+                                    matched_person.session_limit = profile_config_map["session_limit"]
+                                    matched_person.stand_requirement = profile_config_map["stand_requirement"]
+                                    matched_person.gaze_away_limit = float(profile_config_map.get("gaze_away_limit", 20.0))
+                                    matched_person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
+                                    
+                                    if not matched_person.is_posture_calibrated:
+                                        matched_person.state = "Calibrating"
+                                        matched_person.calibration_start = current_time
+                                        matched_person.calibration_accumulator = []
+                                        matched_person.calibration_announced = False
+                                else:
+                                    matched_person.name = "Unknown"
+                                    matched_person.state = "Unregistered Guest"
+                                    continue
                         else:
                             if matched_person.name != self.primary_user_track_id and matched_person.name == "Unknown":
                                 matched_person.name = "Unknown / Bystander"
@@ -597,8 +615,8 @@ class TrackerEngine:
                 
                 self._evaluate_single_target_health(matched_person, pose, current_ratio, dt, current_time, frame_shape)
                 
-                if matched_person.state != matched_person.last_state:
-                    print(f"[STATE CHANGE] {matched_person.name} transitioned from {matched_person.last_state} -> {matched_person.state}")
+                if matched_person.state != getattr(matched_person, "last_state", "Unknown"):
+                    print(f"[STATE CHANGE] {matched_person.name} transitioned from {getattr(matched_person, 'last_state', 'Unknown')} -> {matched_person.state}")
                     matched_person.last_state = matched_person.state
                 
                 if current_time - matched_person.last_log_time >= 1.0:
@@ -609,13 +627,13 @@ class TrackerEngine:
                 if self.primary_user_track_id not in active_ids:
                     self.primary_user_lost_frames += 1
                     if self.primary_user_lost_frames >= 15:
-                        print("[BIOMETRICS] Primary anchor lost for 15 frames. Forcing hard memory flush.")
+                        print("[BIOMETRICS] Primary anchor lost for 15 frames. Caching historical footprint.")
+                        if getattr(self, "current_authenticated_user", None) and self.primary_user_track_id in self.tracked_persons:
+                            self.historical_users[self.current_authenticated_user] = self.tracked_persons[self.primary_user_track_id]
+                            
                         self.primary_user_track_id = None
+                        self.current_authenticated_user = None
                         self.primary_user_lost_frames = 0
-                        
-                        # Purge all internal tracking associations and reset consensus counters
-                        self.tracked_persons.clear()
-                        self.track_counter = 0
                 else:
                     self.primary_user_lost_frames = 0
                                     
@@ -624,10 +642,12 @@ class TrackerEngine:
                     if current_time - person.last_seen > 10.0:
                         if person.name != "Unknown" and person.name != "Unknown / Bystander":
                             self.db_manager.log_session_metrics(person.name, "session_ended", person.sitting_duration_clock)
+                        # Remove from active tracking but leave historical profile intact
                         del self.tracked_persons[track_id]
                     else:
                         if person.state not in ["Calibrating", "Secondary Bystander"]:
                             person.state = "Searching / Re-acquiring"
-                    if person.state != person.last_state:
-                        print(f"[STATE CHANGE] {person.name} transitioned from {person.last_state} -> {person.state}")
+                    if person.state != getattr(person, "last_state", "Unknown"):
+                        print(f"[STATE CHANGE] {person.name} transitioned from {getattr(person, 'last_state', 'Unknown')} -> {person.state}")
                         person.last_state = person.state
+
