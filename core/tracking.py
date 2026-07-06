@@ -97,17 +97,25 @@ class TrackerEngine:
         """Initializes the health tracking engine and tracking dictionaries."""
         self.mutex = threading.Lock()
         self.db_manager = db_manager
-        self.profiles = {}
+        self.profiles = self.db_manager.load_all_profiles()
         
         self.inference_manager = CrossPlatformInferenceManager()
         
         self.historical_users = {}
+        for profile_name, profile_data in self.profiles.items():
+            dummy_box = np.array([0, 0, 0, 0])
+            cold_person = Person(f"Person_hash_cold_{profile_name}", profile_data["embedding"], dummy_box)
+            cold_person.name = profile_name
+            cold_person.is_posture_calibrated = True
+            self.historical_users[profile_name] = cold_person
+
         self.tracked_persons = {}
         self.track_id_counter = 0
         self.frame_count = 0
         
         self.primary_user_track_id = None
-        self.primary_user_lost_frames = 0
+        self.current_authenticated_user = None
+        self.anchor_lost_frame_counter = 0
         self.last_voice_alert = 0.0
         self.system_was_manually_cleared = False
         self.manual_recalibration_requested = False
@@ -527,6 +535,10 @@ class TrackerEngine:
                 else:
                     if self.primary_user_track_id is not None:
                         if matched_person.track_id == self.primary_user_track_id:
+                            # Clear searching state immediately upon re-acquisition
+                            if matched_person.state == "Searching / Re-acquiring":
+                                matched_person.state = "Tracking Active"
+                                
                             if self.manual_recalibration_requested:
                                 matched_person.is_posture_calibrated = False
                                 matched_person.state = "Calibrating"
@@ -572,14 +584,17 @@ class TrackerEngine:
                                 self.primary_user_track_id = matched_person.track_id
                                 self.current_authenticated_user = validated_profile_name
                                 matched_person.name = validated_profile_name
+                                
+                                # Force immediate promotion out of default guest status
+                                matched_person.state = "Tracking Active"
+                                matched_person.is_posture_calibrated = True
                             elif validated_profile_name is None:
                                 matched_person.biometric_consensus_frame_counter = 0
                                 matched_person.name = "Unknown / Bystander"
                                 matched_person.state = "Calibrating"
-                                if matched_person.name == "Unknown / Bystander":
-                                    matched_person.is_posture_calibrated = False
-                                    matched_person.calibration_start = current_time
-                                    matched_person.calibration_accumulator = []
+                                matched_person.is_posture_calibrated = False
+                                matched_person.calibration_start = current_time
+                                matched_person.calibration_accumulator = []
                                 continue
                             else:
                                 matched_person.biometric_consensus_frame_counter += 1
@@ -598,6 +613,8 @@ class TrackerEngine:
                                         matched_person.calibration_start = current_time
                                         matched_person.calibration_accumulator = []
                                         matched_person.calibration_announced = False
+                                    else:
+                                        matched_person.state = "Tracking Active"
                                 else:
                                     matched_person.name = "Unknown"
                                     matched_person.state = "Unregistered Guest"
@@ -606,7 +623,7 @@ class TrackerEngine:
                             if matched_person.name != self.primary_user_track_id and matched_person.name == "Unknown":
                                 matched_person.name = "Unknown / Bystander"
                                 matched_person.state = "Secondary Bystander"
-                            continue
+                                continue
 
                 # The only track that reaches here is the primary user anchor track.
                 gaze_x, is_looking_away = self.inference_manager.extract_pupil_gaze(frame, det["l_eye"], det["r_eye"])
@@ -623,19 +640,28 @@ class TrackerEngine:
                     matched_person.last_log_time = current_time
                                     
             # HARD SESSION EXPIRATION & RESET
+            if not hasattr(self, "anchor_lost_frame_counter"):
+                self.anchor_lost_frame_counter = 0
+                
             if self.primary_user_track_id is not None:
                 if self.primary_user_track_id not in active_ids:
-                    self.primary_user_lost_frames += 1
-                    if self.primary_user_lost_frames >= 15:
-                        print("[BIOMETRICS] Primary anchor lost for 15 frames. Caching historical footprint.")
+                    self.anchor_lost_frame_counter += 1
+                    eviction_limit = 15
+                    if self.primary_user_track_id in self.tracked_persons:
+                        primary_person = self.tracked_persons[self.primary_user_track_id]
+                        if primary_person.state == "Posture Deficit Alert":
+                            eviction_limit = 120
+                            
+                    if self.anchor_lost_frame_counter >= eviction_limit:
+                        print(f"[BIOMETRICS] Primary anchor lost for {eviction_limit} frames. Caching historical footprint.")
                         if getattr(self, "current_authenticated_user", None) and self.primary_user_track_id in self.tracked_persons:
                             self.historical_users[self.current_authenticated_user] = self.tracked_persons[self.primary_user_track_id]
                             
                         self.primary_user_track_id = None
                         self.current_authenticated_user = None
-                        self.primary_user_lost_frames = 0
+                        self.anchor_lost_frame_counter = 0
                 else:
-                    self.primary_user_lost_frames = 0
+                    self.anchor_lost_frame_counter = 0
                                     
             for track_id, person in list(self.tracked_persons.items()):
                 if track_id not in active_ids:
