@@ -1,54 +1,56 @@
 import cv2
 import queue
-import subprocess
 import threading
-import os
 import time
+import platform
 
 class DynamicCameraIngestion:
-    def __init__(self):
+    def __init__(self, camera_index=0):
         self.frame_queue = queue.Queue(maxsize=1)
         self.running = True
         self.cap = None
-        self.gst_process = None
-        self.pipe_path = '/home/ubuntu/deskbot/camera_pipe'
+        self.camera_index = camera_index
+        self.os_type = platform.system()
+        self.arch_type = platform.machine().lower()
 
     def start(self):
-        if os.path.exists('/usr/lib/libQnnHtp.so'):
-            print("[*] Qualcomm Hardware Node Detected. Spawning isolated GStreamer pipeline...")
-            self._start_gstreamer()
-        else:
-            print("[*] Native OS Developer Fork Detected. Starting cv2.VideoCapture(0)...")
-            self._start_native()
-
-    def _start_gstreamer(self):
-        os.makedirs(os.path.dirname(self.pipe_path), exist_ok=True)
-        if os.path.exists(self.pipe_path):
-            try:
-                os.remove(self.pipe_path)
-            except Exception:
-                pass
-        os.mkfifo(self.pipe_path)
+        # 1. Attempt Qualcomm Hardware-Accelerated GStreamer Pipeline (Linux aarch64)
+        if self.os_type == "Linux" and "aarch64" in self.arch_type:
+            print(f"[*] Target: Qualcomm Linux ARM64. Initializing Hardware IM SDK Pipeline...")
+            gst_pipeline = (
+                f"v4l2src device=/dev/video{self.camera_index} ! "
+                "image/jpeg,width=1920,height=1080,framerate=30/1 ! "
+                "qtimididec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink drop=true max-buffers=1"
+            )
+            self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
             
-        cmd = [
-            "gst-launch-1.0", 
-            "v4l2src", "!",
-            "video/x-raw,format=NV12,width=640,height=480,framerate=30/1", "!",
-            "jpegenc", "!",
-            "filesink", f"location={self.pipe_path}"
-        ]
-        self.gst_process = subprocess.Popen(cmd)
-        
-        self.cap = cv2.VideoCapture(self.pipe_path, cv2.CAP_GSTREAMER)
-        self._start_worker()
+            if self.cap is not None and self.cap.isOpened():
+                print("[*] Qualcomm GStreamer Pipeline Active.")
+                self._start_worker()
+                return
+            else:
+                print("[!] GStreamer initialization failed. Falling back to native V4L2...")
 
-    def _start_native(self):
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self._start_worker()
+        # 2. Native Desktop Fallbacks
+        print(f"[*] Initializing Native OS VideoCapture Backend...")
+        if self.os_type == "Windows":
+            backend = cv2.CAP_DSHOW
+        elif self.os_type == "Darwin":
+            backend = cv2.CAP_AVFOUNDATION
+        else:
+            backend = cv2.CAP_V4L2
+
+        self.cap = cv2.VideoCapture(self.camera_index, backend)
         
+        # Safe resolution fallback
+        if self.cap is not None and self.cap.isOpened():
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self._start_worker()
+        else:
+            print("[!] FATAL: Could not open any camera backend.")
+
     def _start_worker(self):
         def worker():
             while self.running:
@@ -76,19 +78,8 @@ class DynamicCameraIngestion:
 
     def stop(self):
         self.running = False
-        try:
-            if self.cap:
-                self.cap.release()
-        except (Exception, KeyboardInterrupt):
-            pass
-        try:
-            if self.gst_process:
-                self.gst_process.terminate()
-                self.gst_process.wait()
-        except (Exception, KeyboardInterrupt):
-            pass
-        if os.path.exists(self.pipe_path):
+        if self.cap:
             try:
-                os.remove(self.pipe_path)
+                self.cap.release()
             except Exception:
                 pass

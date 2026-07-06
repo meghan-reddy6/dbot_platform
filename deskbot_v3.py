@@ -1,4 +1,3 @@
-# d:/Thundersoft/dbot/deskbot_v3.py
 import time
 import cv2
 import logging
@@ -21,7 +20,7 @@ logger = logging.getLogger("DeskBotV3.MainOrchestrator")
 app = Flask(__name__)
 db_conn = DatabaseManager()
 health_evaluator = TrackerEngine(db_conn)
-camera_bridge = DynamicCameraIngestion()
+camera_bridge = DynamicCameraIngestion(camera_index=0)
 
 latest_frame_buffer = None
 

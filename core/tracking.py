@@ -5,9 +5,10 @@ import numpy as np
 import cv2
 import math
 import uuid
+import queue
 from typing import Any, Dict, List, Optional, Tuple, Set
 from collections import deque, Counter
-from core.hardware_pipeline import CrossPlatformInferenceManager
+from core.biometrics import CrossPlatformInferenceManager
 
 logger = logging.getLogger("DeskBotV3.Tracking")
 state_mutex = threading.Lock()
@@ -18,6 +19,54 @@ try:
 except ImportError:
     HAVE_PYTTSX3 = False
     print("[!] pyttsx3 not installed. Voice alerts will be muted.")
+
+class VoiceAlertDaemon:
+    def __init__(self):
+        self.message_queue = queue.Queue()
+        self.running = True
+        self.last_played = {}
+        threading.Thread(target=self._worker, daemon=True).start()
+        
+    def _worker(self):
+        if not HAVE_PYTTSX3:
+            return
+        import pyttsx3
+        try:
+            import pythoncom
+        except ImportError:
+            pythoncom = None
+            
+        while self.running:
+            try:
+                msg, category = self.message_queue.get(timeout=1.0)
+                try:
+                    if pythoncom:
+                        pythoncom.CoInitialize()
+                    engine = pyttsx3.init()
+                    engine.setProperty('rate', 145)
+                    engine.say(msg)
+                    engine.runAndWait()
+                    # Delete engine explicitly to force SAPI release
+                    del engine
+                except Exception as e:
+                    print(f"[VOICE DAEMON ERROR] {e}")
+                finally:
+                    if pythoncom:
+                        try:
+                            pythoncom.CoUninitialize()
+                        except Exception:
+                            pass
+            except queue.Empty:
+                pass
+            except Exception as e:
+                print(f"[VOICE DAEMON QUEUE ERROR] {e}")
+
+    def dispatch(self, text: str, category: str, cooldown: float = 30.0) -> None:
+        now = time.time()
+        last = self.last_played.get(category, 0.0)
+        if now - last > cooldown:
+            self.last_played[category] = now
+            self.message_queue.put((text, category))
 
 class Person:
     """
@@ -100,6 +149,7 @@ class TrackerEngine:
         self.profiles = self.db_manager.load_all_profiles()
         
         self.inference_manager = CrossPlatformInferenceManager()
+        self.voice_daemon = VoiceAlertDaemon()
         
         self.historical_users = {}
         for profile_name, profile_data in self.profiles.items():
@@ -158,30 +208,17 @@ class TrackerEngine:
             
         return validated_profile_name, calculated_similarity
 
-    def _dispatch_voice(self, text: str) -> None:
-        """Dispatches an asynchronous voice alert."""
-        now = time.time()
-        if now - self.last_voice_alert > 10.0:
-            self.last_voice_alert = now
-            def voice_worker():
-                if not HAVE_PYTTSX3: return
-                import pyttsx3
-                try:
-                    engine = pyttsx3.init()
-                    engine.setProperty('rate', 145)
-                    engine.say(text)
-                    engine.runAndWait()
-                    engine.proxy.disconnect()
-                    del engine
-                except Exception: pass
-            threading.Thread(target=voice_worker, daemon=True).start()
+    def _dispatch_voice(self, text: str, category: str = "general", cooldown: float = 10.0) -> None:
+        """Dispatches an asynchronous voice alert through the dedicated daemon queue."""
+        if hasattr(self, 'voice_daemon'):
+            self.voice_daemon.dispatch(text, category, cooldown)
 
     def _evaluate_single_target_health(self, person: "Person", pose: dict, current_ratio: float, dt: float, current_time: float, frame_shape: tuple) -> None:
         """
         Evaluates frame-level posture thresholds against calibrated baselines.
         Applies strict temporal hysteresis to prevent state chatter.
         """
-        if person.name.startswith("Unknown") or self.primary_user_track_id is None:
+        if (person.name.startswith("Unknown") or self.primary_user_track_id is None) and person.state != "Calibrating":
             person.state = "Unregistered Target"
             person.sustained_slouch_debounce_timer = 0.0
             person.tracking_active_debounce_timer = 0.0
@@ -221,15 +258,20 @@ class TrackerEngine:
                 
             person.calibration_accumulator.append((person.pitch, current_ratio_computed, shoulder_center_y))
             
-            if elapsed_calib >= 3.0:
+            if elapsed_calib >= 5.0:
                 if person.calibration_accumulator:
                     person.calibrated_baseline_neck_pitch = float(np.mean([i[0] for i in person.calibration_accumulator]))
                     person.baseline_torso_ratio = float(np.mean([i[1] for i in person.calibration_accumulator]))
                     person.baseline_shoulder_y = float(np.mean([i[2] for i in person.calibration_accumulator]))
                 person.calibration_accumulator = []
                 person.state = "Tracking Active"
+                if self.profiles:
+                    person.name = list(self.profiles.keys())[0]
+                else:
+                    person.name = f"Operator #{str(person.track_id)[-4:]}"
                 person.is_posture_calibrated = True
-                self._dispatch_voice("Calibration successful. Posture monitoring is now active.")
+                self.primary_user_track_id = person.track_id
+                self._dispatch_voice("Calibration successful. Posture monitoring is now active.", "calibration_success", 30.0)
             return
 
         if person.state in ["Tracking Active", "Standing", "Looking Away", "Ocular Break Recommended", "Session Limit Reached - Stand Up!", "Posture Deficit Alert"]:
@@ -248,10 +290,10 @@ class TrackerEngine:
             relative_slouch = current_neck_pitch_angle - person.calibrated_baseline_neck_pitch
             
             if person.state == "Posture Deficit Alert":
-                is_fully_upright = (current_torso_depth_ratio >= person.baseline_torso_ratio * 0.98) and (relative_slouch <= person.slouch_sensitivity * 0.40)
+                is_fully_upright = (current_torso_depth_ratio >= person.baseline_torso_ratio * 0.95) and (relative_slouch <= person.slouch_sensitivity * 0.40)
                 is_slouching = not is_fully_upright
             else:
-                is_slouching = (current_torso_depth_ratio < (person.baseline_torso_ratio * 0.90)) or (relative_slouch > person.slouch_sensitivity * 0.70)
+                is_slouching = (current_torso_depth_ratio < (person.baseline_torso_ratio * 0.80)) or (relative_slouch > 22.0)
             
             normalized_height_delta = (person.baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
             is_standing = (normalized_height_delta > 0.65) or (current_torso_depth_ratio > (person.baseline_torso_ratio * 1.65))
@@ -287,7 +329,7 @@ class TrackerEngine:
             if filtered_candidate == "Posture Deficit Alert":
                 person.sustained_slouch_debounce_timer += dt
                 person.tracking_active_debounce_timer = 0.0
-                if person.sustained_slouch_debounce_timer >= 2.5:
+                if person.sustained_slouch_debounce_timer >= 3.0:
                     person.state = "Posture Deficit Alert"
             elif filtered_candidate == "Tracking Active":
                 person.tracking_active_debounce_timer += dt
@@ -324,12 +366,10 @@ class TrackerEngine:
                         person.session_limit_announced = True
 
             if person.state == "Posture Deficit Alert":
-                person.slouch_timer += dt
-                if person.slouch_timer >= 8.0:
-                    if not person.slouch_announced:
-                        print(f"[TIMER ALERT] Triggering Voice Alert for: {person.state}")
-                        self._dispatch_voice(f"Please correct your posture, {person.name}.")
-                        person.slouch_announced = True
+                if not person.slouch_announced:
+                    print(f"[TIMER ALERT] Triggering Voice Alert for: {person.state}")
+                    self._dispatch_voice(f"Please correct your posture, {person.name}.", category="posture_alert", cooldown=30.0)
+                    person.slouch_announced = True
             else:
                 person.slouch_timer = max(0.0, person.slouch_timer - dt)
                 person.slouch_announced = False
@@ -517,7 +557,7 @@ class TrackerEngine:
                     matched_person.smoothed_ratio = current_ratio
                     matched_person.smoothed_y = shoulder_center_y
                 else:
-                    alpha = 0.15
+                    alpha = 0.10
                     matched_person.smoothed_pitch = (1 - alpha) * matched_person.smoothed_pitch + alpha * matched_person.pitch
                     matched_person.smoothed_ratio = (1 - alpha) * matched_person.smoothed_ratio + alpha * current_ratio
                     matched_person.smoothed_y = (1 - alpha) * matched_person.smoothed_y + alpha * shoulder_center_y
@@ -533,11 +573,21 @@ class TrackerEngine:
                             matched_person.calibration_accumulator = []
                             matched_person.calibration_announced = False
                 else:
+                    run_global_biometric_search = False
+                    
                     if self.primary_user_track_id is not None:
                         if matched_person.track_id == self.primary_user_track_id:
                             # Clear searching state immediately upon re-acquisition
-                            if matched_person.state == "Searching / Re-acquiring":
-                                matched_person.state = "Tracking Active"
+                            if matched_person.state in ["Searching / Re-acquiring", "Absent"]:
+                                embedding = self.inference_manager.execute_stage2_biometrics(det["roi_frame"])
+                                validated_profile_name, calculated_similarity = self._match_profile(embedding)
+                                
+                                if validated_profile_name is not None and validated_profile_name == self.current_authenticated_user:
+                                    print(f"[BIOMETRICS] Face matched via LBP signature (sim: {calculated_similarity:.2f}). Resuming track.")
+                                    matched_person.state = "Tracking Active"
+                                    matched_person.state_history_window.clear()
+                                else:
+                                    continue
                                 
                             if self.manual_recalibration_requested:
                                 matched_person.is_posture_calibrated = False
@@ -547,10 +597,52 @@ class TrackerEngine:
                                 matched_person.calibration_announced = False
                                 self.manual_recalibration_requested = False
                         else:
-                            matched_person.name = "Unknown / Bystander"
-                            matched_person.state = "Secondary Bystander"
-                            continue
+                            primary_person = self.tracked_persons.get(self.primary_user_track_id)
+                            if primary_person is None:
+                                self.primary_user_track_id = None
+                                run_global_biometric_search = True
+                            elif primary_person.state in ["Searching / Re-acquiring", "Absent"]:
+                                crop_y1, crop_y2 = int(max(0, box[1])), int(min(h, box[3]))
+                                crop_x1, crop_x2 = int(max(0, box[0])), int(min(w, box[2]))
+                                if (crop_y2 - crop_y1) < 64 or (crop_x2 - crop_x1) < 64:
+                                    matched_person.name = "Unknown / Bystander"
+                                    matched_person.state = "Secondary Bystander"
+                                    continue
+                                    
+                                embedding = self.inference_manager.execute_stage2_biometrics(det["roi_frame"])
+                                norm_emb = embedding / (np.linalg.norm(embedding) + 1e-6)
+                                norm_primary = primary_person.embedding / (np.linalg.norm(primary_person.embedding) + 1e-6)
+                                sim = np.dot(norm_emb, norm_primary)
+                                
+                                if sim >= 0.86:
+                                    print(f"[BIOMETRICS] Returning target matched (sim: {sim:.2f}). Re-latching anchor.")
+                                    old_person = primary_person
+                                    old_person.track_id = matched_person.track_id
+                                    old_person.box = matched_person.box
+                                    old_person.pose = matched_person.pose
+                                    old_person.last_seen = current_time
+                                    old_person.last_update = current_time
+                                    
+                                    if self.primary_user_track_id in self.tracked_persons:
+                                        del self.tracked_persons[self.primary_user_track_id]
+                                        
+                                    self.tracked_persons[matched_person.track_id] = old_person
+                                    matched_person = old_person
+                                    self.primary_user_track_id = matched_person.track_id
+                                    matched_person.state = "Tracking Active"
+                                    matched_person.state_history_window.clear()
+                                else:
+                                    matched_person.name = "Unknown / Bystander"
+                                    matched_person.state = "Secondary Bystander"
+                                    continue
+                            else:
+                                matched_person.name = "Unknown / Bystander"
+                                matched_person.state = "Secondary Bystander"
+                                continue
                     else:
+                        run_global_biometric_search = True
+
+                    if run_global_biometric_search:
                         crop_y1, crop_y2 = int(max(0, box[1])), int(min(h, box[3]))
                         crop_x1, crop_x2 = int(max(0, box[0])), int(min(w, box[2]))
                         crop_h = crop_y2 - crop_y1
@@ -639,26 +731,30 @@ class TrackerEngine:
                 if current_time - matched_person.last_log_time >= 1.0:
                     matched_person.last_log_time = current_time
                                     
-            # HARD SESSION EXPIRATION & RESET
+            # =================================================================
+            # ✅ CORRECTED: HARD SESSION EXPIRATION & RESET WITH ESCAPE BRAKE
+            # =================================================================
             if not hasattr(self, "anchor_lost_frame_counter"):
                 self.anchor_lost_frame_counter = 0
                 
             if self.primary_user_track_id is not None:
                 if self.primary_user_track_id not in active_ids:
                     self.anchor_lost_frame_counter += 1
-                    eviction_limit = 15
-                    if self.primary_user_track_id in self.tracked_persons:
-                        primary_person = self.tracked_persons[self.primary_user_track_id]
-                        if primary_person.state == "Posture Deficit Alert":
-                            eviction_limit = 120
+                    eviction_limit = 150
                             
                     if self.anchor_lost_frame_counter >= eviction_limit:
-                        print(f"[BIOMETRICS] Primary anchor lost for {eviction_limit} frames. Caching historical footprint.")
-                        if getattr(self, "current_authenticated_user", None) and self.primary_user_track_id in self.tracked_persons:
-                            self.historical_users[self.current_authenticated_user] = self.tracked_persons[self.primary_user_track_id]
+                        if self.primary_user_track_id in self.tracked_persons:
+                            primary_person = self.tracked_persons[self.primary_user_track_id]
                             
-                        self.primary_user_track_id = None
-                        self.current_authenticated_user = None
+                            # Only trigger logs and state transitions if we aren't already searching!
+                            if primary_person.state != "Searching / Re-acquiring":
+                                print(f"[BIOMETRICS] Primary anchor lost for {eviction_limit} frames. Soft-timeout triggered.")
+                                primary_person.state = "Searching / Re-acquiring"
+                                primary_person.state_history_window.clear()
+                                # Stash the last known authenticated workspace token name
+                                self.current_authenticated_user = primary_person.name
+                        
+                        # Break out and reset the counter so it stops printing and allows camera thread recovery
                         self.anchor_lost_frame_counter = 0
                 else:
                     self.anchor_lost_frame_counter = 0
@@ -666,12 +762,13 @@ class TrackerEngine:
             for track_id, person in list(self.tracked_persons.items()):
                 if track_id not in active_ids:
                     if current_time - person.last_seen > 10.0:
-                        if person.name != "Unknown" and person.name != "Unknown / Bystander":
-                            self.db_manager.log_session_metrics(person.name, "session_ended", person.sitting_duration_clock)
-                        # Remove from active tracking but leave historical profile intact
-                        del self.tracked_persons[track_id]
+                        if person.state != "Absent":
+                            if person.name != "Unknown" and person.name != "Unknown / Bystander":
+                                self.db_manager.log_session_metrics(person.name, "session_ended", person.sitting_duration_clock)
+                            person.state = "Absent"
+                            person.state_history_window.clear()
                     else:
-                        if person.state not in ["Calibrating", "Secondary Bystander"]:
+                        if person.state not in ["Calibrating", "Secondary Bystander", "Absent"]:
                             person.state = "Searching / Re-acquiring"
                     if person.state != getattr(person, "last_state", "Unknown"):
                         print(f"[STATE CHANGE] {person.name} transitioned from {getattr(person, 'last_state', 'Unknown')} -> {person.state}")

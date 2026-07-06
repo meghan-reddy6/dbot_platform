@@ -51,7 +51,7 @@ class DatabaseManager:
     def create_profile(self, user_name, face_embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, ocular_break_duration=20, screen_gaze_limit=1200):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT OR REPLACE INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                   (user_name, face_embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit))
         conn.commit()
         conn.close()
