@@ -26,7 +26,7 @@ class NativeFaceCascade:
         cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
-    def generate_signature(self, face_crop: np.ndarray) -> np.ndarray:
+    def generate_signature(self, face_crop: np.ndarray, pre_aligned: bool = False) -> np.ndarray:
         """
         Executes cascade and produces a 128-d LBP texture signature.
         Divides the face into an 8x8 grid (64 cells). Each cell generates a 2-bin LBP histogram.
@@ -34,15 +34,19 @@ class NativeFaceCascade:
         if face_crop is None or face_crop.size == 0:
             return np.zeros(128, dtype=np.float32)
 
-        # 1. Detection
         gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+        
+        if not pre_aligned:
+            # 1. Detection
+            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
 
-        if len(faces) == 0:
-            return np.zeros(128, dtype=np.float32)
+            if len(faces) == 0:
+                return np.zeros(128, dtype=np.float32)
 
-        x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
-        inner_face = gray[y:y+h, x:x+w]
+            x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
+            inner_face = gray[y:y+h, x:x+w]
+        else:
+            inner_face = gray
         
         # 2. Extract LBP 128-d
         inner_face = cv2.resize(inner_face, (64, 64))
@@ -281,8 +285,8 @@ class CrossPlatformInferenceManager:
                 })
         return detections
 
-    def execute_stage2_biometrics(self, face_crop: np.ndarray) -> np.ndarray:
+    def execute_stage2_biometrics(self, face_crop: np.ndarray, pre_aligned: bool = False) -> np.ndarray:
         if self.stage2_cascade:
-            return self.stage2_cascade.generate_signature(face_crop)
+            return self.stage2_cascade.generate_signature(face_crop, pre_aligned)
         else:
             return np.zeros(128, dtype=np.float32)

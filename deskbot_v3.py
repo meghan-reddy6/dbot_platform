@@ -77,27 +77,8 @@ def create_profile_endpoint() -> Any:
     if not name:
         return jsonify({"error": "Profile name is required."}), 400
         
-    with state_mutex:
-        person_to_register = None
-        for tracked_person in health_evaluator.tracked_persons.values():
-            if tracked_person.name == "Unknown (Ready for Registration)" or "Unknown" in tracked_person.name:
-                person_to_register = tracked_person
-                break
-                
-        if person_to_register is None:
-            return jsonify({"error": "No unregistered skeleton targets currently visible in camera frame."}), 400
-            
-        try:
-            db_conn.create_profile(name, person_to_register.embedding)
-            person_to_register.name = name
-            person_to_register.state = "Calibrating"
-            person_to_register.calibration_start = time.time()
-            person_to_register.calibration_accumulator = []
-            person_to_register.calibration_announced = False
-            health_evaluator.sync_profiles()
-            return jsonify({"message": f"Successfully registered user profile for {name}."})
-        except Exception as e:
-            return jsonify({"error": f"Database insertion failed: {str(e)}"}), 500
+    health_evaluator.pending_registration_name = name
+    return jsonify({"message": f"Successfully queued registration for {name}."})
 
 @app.route('/api/profile/update', methods=['POST'])
 def update_profile() -> Any:
@@ -130,8 +111,7 @@ def delete_profile_endpoint() -> Any:
 @app.route('/api/profile/recalibrate', methods=['POST'])
 def trigger_manual_recalibration() -> Any:
     """Triggers an explicit manual recalibration of the primary anchor."""
-    with state_mutex:
-        health_evaluator.manual_recalibration_requested = True
+    health_evaluator.trigger_recalibration = True
     return jsonify({"status": "success", "message": "Manual recalibration cycle triggered successfully."})
 
 def video_stream_generator():
