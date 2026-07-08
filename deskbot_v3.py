@@ -18,9 +18,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DeskBotV3.MainOrchestrator")
 
 app = Flask(__name__)
-db_conn = DatabaseManager()
-health_evaluator = TrackerEngine(db_conn)
-camera_bridge = DynamicCameraIngestion(camera_index=0)
+db_conn = None
+health_evaluator = None
+camera_bridge = None
 
 latest_frame_buffer = None
 
@@ -144,6 +144,13 @@ def master_inference_loop():
             latest_frame_buffer = annotated_layer
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    db_conn = DatabaseManager()
+    health_evaluator = TrackerEngine(db_conn)
+    camera_bridge = DynamicCameraIngestion(camera_index=0)
+    
     try:
         camera_bridge.start()
         threading.Thread(target=master_inference_loop, daemon=True).start()
