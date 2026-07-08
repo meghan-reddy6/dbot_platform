@@ -847,8 +847,10 @@ class TrackerEngine:
                 active_ids.add(best_guest.track_id)
                 
         # ---------------------------------------------------------
+        # ---------------------------------------------------------
         # PHASE 3: UNIFIED LIFECYCLE EVALUATION AND TEMPORAL TIME DECAY
         # ---------------------------------------------------------
+        PROTECTED_STATES = {"Calibrating", "Posture Deficit Alert", "Session Limit Reached - Stand Up!"}
         for act_id in list(active_ids):
             person = self.tracked_persons[act_id]
             dt_step = current_time - person.last_update if person.last_update else 0.033
@@ -878,7 +880,7 @@ class TrackerEngine:
                         person.verification_status = "VERIFIED"
                         person.verified_name = person.frame_val_name
                         person.name = person.frame_val_name
-                        if person.state != "Calibrating":
+                        if person.state not in PROTECTED_STATES:
                             person.state = "Tracking Active"
                         self.primary_user_track_id = person.track_id
                         self.current_authenticated_user = person.frame_val_name
@@ -886,7 +888,7 @@ class TrackerEngine:
                             person.state_history_window.clear()
             else:
                 person.biometric_match_counter = 0
-                if getattr(person, 'verification_status', 'UNKNOWN') == "VERIFIED":
+                if getattr(person, 'verification_status', 'UNKNOWN') in ["VERIFIED", "VERIFYING"]:
                     person.lost_grace_timer += dt_step
                     if person.lost_grace_timer > 1.5:
                         print(f"[TRACKING] Grace window expired for {person.name}. Dropping state.")
@@ -896,8 +898,11 @@ class TrackerEngine:
                         person.candidate_name = None
                         person.verified_name = None
                     else:
-                        if person.state != "Calibrating":
-                            person.state = "Tracking Active"
+                        if person.verification_status == "VERIFIED":
+                            if person.state not in PROTECTED_STATES:
+                                person.state = "Tracking Active"
+                        elif person.verification_status == "VERIFYING":
+                            person.state = "Verifying Identity"
                 else:
                     person.verification_status = "UNKNOWN"
                     person.name = "Unknown"
