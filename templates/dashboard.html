@@ -155,14 +155,21 @@
                 const targets = await res.json();
                 
                 const container = document.getElementById('targets-container');
-                container.innerHTML = '';
                 
                 if (targets.length === 0) {
                     container.innerHTML = '<div class="glass-card" style="text-align: center; color: #94a3b8; font-style: italic;">Monitoring offline or no targets in frame...</div>';
                     return;
                 }
                 
+                if (container.children.length === 1 && container.children[0].textContent.includes('offline')) {
+                    container.innerHTML = '';
+                }
+                
+                const currentTrackIds = new Set();
+                
                 targets.forEach(t => {
+                    currentTrackIds.add(String(t.id));
+                    
                     let sittingTime = t.sitting_time !== undefined ? Math.round(t.sitting_time) : 0;
                     let standingTime = t.standing_time !== undefined ? Math.round(t.standing_time) : 0;
                     let headPitch = t.pitch !== undefined ? Math.round(t.pitch) : 0;
@@ -180,9 +187,6 @@
                     if (isCritical) cardClass += " critical";
                     else if (isWarning) cardClass += " warning";
                     else if (isCalibrating) cardClass += " calibrating";
-                    
-                    const card = document.createElement('div');
-                    card.className = cardClass;
                     
                     const stateStr = t.state || "";
                     const isCalib = stateStr.includes("Calibrating");
@@ -202,68 +206,108 @@
                         </div>
                     `;
 
-                    card.innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem;">
-                            <div style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Live Status Matrix</div>
-                            <div style="text-align: right; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 20px;">
-                                <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">ACTIVE WORKSPACE USER:</span>
-                                <span style="font-size: 1rem; color: #fff; font-weight: 500;">${t.name}</span>
-                            </div>
-                        </div>
-                        
-                        <div style="display: flex; gap: 6px; margin-bottom: 2rem;">
-                            ${renderStateBlock(isCalib, "⚙️", "Calibrating", "#38bdf8")}
-                            ${renderStateBlock(isActiveSit, "🧘", "Active", "#10b981")}
-                            ${renderStateBlock(isSlouch, "⚠️", "Posture", "#f59e0b")}
-                            ${renderStateBlock(isOcular, "👀", "Ocular", "#a855f7")}
-                            ${renderStateBlock(isSession, "🚨", "Limit", "#ef4444")}
-                            ${renderStateBlock(isStand, "🧍", "Standing", "#3b82f6")}
-                            ${renderStateBlock(isCoast, "⏸️", "Searching", "#64748b")}
-                        </div>
-                        
-                        <div style="margin-top: 1.5rem;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                                <span>Continuous Sitting Limit Cap</span>
-                                <span>${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m</span>
-                            </div>
-                            <div class="progress-container">
-                                <div class="progress-bar ${sitPct > 90 ? 'danger' : ''}" style="width: ${sitPct}%;"></div>
-                            </div>
-                        </div>
-                        
-                        <div style="margin-top: 1rem;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
-                                <span>Mandatory Stand Duration Requirement</span>
-                                <span>${standingTime}s / ${standRequirement}s</span>
-                            </div>
-                            <div class="progress-container">
-                                <div class="progress-bar success" style="width: ${standPct}%;"></div>
-                            </div>
-                        </div>
-                        
-                        <div style="margin-top: 1rem; margin-bottom: 1rem;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem; font-weight: 500; color: #cbd5e1;">
-                                <span>Continuous Screen Gaze Limit</span>
-                                <span id="gaze-text-timer">${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m</span>
-                            </div>
-                            <div style="width: 100%; background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.02);">
-                                <div id="gaze-progress-bar" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); width: ${(t.screen_gaze_current / t.screen_gaze_max) * 100}%; transition: width 0.5s ease-out;"></div>
-                            </div>
-                        </div>
-                        
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
-                            <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
-                                <div class="metric-label">Head Pitch</div>
-                                <div class="metric-val">${headPitch}°</div>
-                            </div>
-                            <div class="metric-card" style="background: rgba(15,23,42,0.4); padding: 1.2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03);">
-                                <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Ocular Break Accumulator</div>
-                                <div id="ocular-break-display" style="font-size: 2.2rem; font-weight: 700; color: #fff; margin-top: 0.5rem;">${t.ocular_break_current}s / ${t.ocular_break_max}s</div>
-                            </div>
-                        </div>
+                    const statesHtml = `
+                        ${renderStateBlock(isCalib, "⚙️", "Calibrating", "#38bdf8")}
+                        ${renderStateBlock(isActiveSit, "🧘", "Active", "#10b981")}
+                        ${renderStateBlock(isSlouch, "⚠️", "Posture", "#f59e0b")}
+                        ${renderStateBlock(isOcular, "👀", "Ocular", "#a855f7")}
+                        ${renderStateBlock(isSession, "🚨", "Limit", "#ef4444")}
+                        ${renderStateBlock(isStand, "🧍", "Standing", "#3b82f6")}
+                        ${renderStateBlock(isCoast, "⏸️", "Searching", "#64748b")}
                     `;
-                    container.appendChild(card);
+                    
+                    let card = document.getElementById(`target-card-${t.id}`);
+                    
+                    if (!card) {
+                        card = document.createElement('div');
+                        card.id = `target-card-${t.id}`;
+                        card.className = cardClass;
+                        card.innerHTML = `
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem;">
+                                <div style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Live Status Matrix</div>
+                                <div style="text-align: right; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 20px;">
+                                    <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">ACTIVE WORKSPACE USER:</span>
+                                    <span id="name-${t.id}" style="font-size: 1rem; color: #fff; font-weight: 500;"></span>
+                                </div>
+                            </div>
+                            
+                            <div id="states-${t.id}" style="display: flex; gap: 6px; margin-bottom: 2rem;">
+                            </div>
+                            
+                            <div style="margin-top: 1.5rem;">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                                    <span>Continuous Sitting Limit Cap</span>
+                                    <span id="sit-text-${t.id}"></span>
+                                </div>
+                                <div class="progress-container">
+                                    <div id="sit-bar-${t.id}" class="progress-bar"></div>
+                                </div>
+                            </div>
+                            
+                            <div style="margin-top: 1rem;">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                                    <span>Mandatory Stand Duration Requirement</span>
+                                    <span id="stand-text-${t.id}"></span>
+                                </div>
+                                <div class="progress-container">
+                                    <div id="stand-bar-${t.id}" class="progress-bar success"></div>
+                                </div>
+                            </div>
+                            
+                            <div style="margin-top: 1rem; margin-bottom: 1rem;">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem; font-weight: 500; color: #cbd5e1;">
+                                    <span>Continuous Screen Gaze Limit</span>
+                                    <span id="gaze-text-${t.id}"></span>
+                                </div>
+                                <div style="width: 100%; background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.02);">
+                                    <div id="gaze-bar-${t.id}" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); transition: width 0.5s ease-out;"></div>
+                                </div>
+                            </div>
+                            
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
+                                <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+                                    <div class="metric-label">Head Pitch</div>
+                                    <div id="pitch-val-${t.id}" class="metric-val"></div>
+                                </div>
+                                <div class="metric-card" style="background: rgba(15,23,42,0.4); padding: 1.2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03);">
+                                    <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Ocular Break Accumulator</div>
+                                    <div id="ocular-val-${t.id}" style="font-size: 2.2rem; font-weight: 700; color: #fff; margin-top: 0.5rem;"></div>
+                                </div>
+                            </div>
+                        `;
+                        container.appendChild(card);
+                    }
+                    
+                    // IN-PLACE DOM UPDATES
+                    card.className = cardClass;
+                    document.getElementById(`name-${t.id}`).textContent = t.name;
+                    document.getElementById(`states-${t.id}`).innerHTML = statesHtml;
+                    
+                    document.getElementById(`sit-text-${t.id}`).textContent = `${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m`;
+                    const sitBar = document.getElementById(`sit-bar-${t.id}`);
+                    sitBar.style.width = `${sitPct}%`;
+                    sitBar.className = `progress-bar ${sitPct > 90 ? 'danger' : ''}`;
+                    
+                    document.getElementById(`stand-text-${t.id}`).textContent = `${standingTime}s / ${standRequirement}s`;
+                    document.getElementById(`stand-bar-${t.id}`).style.width = `${standPct}%`;
+                    
+                    document.getElementById(`gaze-text-${t.id}`).textContent = `${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m`;
+                    document.getElementById(`gaze-bar-${t.id}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
+                    
+                    document.getElementById(`pitch-val-${t.id}`).textContent = `${headPitch}°`;
+                    document.getElementById(`ocular-val-${t.id}`).textContent = `${t.ocular_break_current}s / ${t.ocular_break_max}s`;
                 });
+                
+                // Cleanup stale cards dynamically
+                Array.from(container.children).forEach(child => {
+                    if (child.id && child.id.startsWith('target-card-')) {
+                        const childId = child.id.replace('target-card-', '');
+                        if (!currentTrackIds.has(childId)) {
+                            container.removeChild(child);
+                        }
+                    }
+                });
+                
             } catch (e) {
                 console.error("Telemetry error", e);
             }
@@ -286,18 +330,19 @@
                         <th>Actions</th>
                     </tr>`;
                 
-                profiles.forEach(p => {
+                Object.keys(profiles).forEach(username => {
+                    const p = profiles[username];
                     let gazeLimitMin = Math.round(p.screen_gaze_limit / 60); 
                     let sitLimitMin = Math.round(p.session_limit / 60);
                     html += `
                         <tr>
-                            <td style="font-weight: 500;">${p.user_name}</td>
-                            <td><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${p.user_name}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
-                            <td><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
-                            <td><input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.stand_requirement}s</span></td>
-                            <td><input type="range" min="5" max="60" step="5" value="${gazeLimitMin}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
-                            <td><input type="range" min="5" max="120" step="5" value="${p.ocular_break_duration}" onchange="updateProfile('${p.user_name}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, this.value)"> <span>${p.ocular_break_duration}s</span></td>
-                            <td><button class="danger" onclick="deleteProfile('${p.user_name}')">Delete Profile</button></td>
+                            <td style="font-weight: 500;">${username}</td>
+                            <td><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${username}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
+                            <td><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
+                            <td><input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.stand_requirement}s</span></td>
+                            <td><input type="range" min="5" max="60" step="5" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
+                            <td><input type="range" min="5" max="120" step="5" value="${p.ocular_break_duration}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, this.value)"> <span>${p.ocular_break_duration}s</span></td>
+                            <td><button class="danger" onclick="deleteProfile('${username}')">Delete Profile</button></td>
                         </tr>
                     `;
                 });
@@ -318,20 +363,19 @@
             }
         }
 
-        async function createProfile() {
+        function createProfile() {
             const name = document.getElementById('new-profile-name').value;
             if (!name) return alert("Enter a valid profile name.");
-            const res = await fetch('/api/profile/create', {
+            fetch('/api/profile/create', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ name })
-            });
-            const data = await res.json();
-            if (data.error) alert(data.error);
-            
-            document.getElementById('new-profile-name').value = '';
-            pollProfiles();
-            refreshLiveTelemetry();
+            }).then(res => res.json()).then(data => {
+                if (data.error) alert(data.error);
+                document.getElementById('new-profile-name').value = '';
+                pollProfiles();
+                refreshLiveTelemetry();
+            }).catch(e => console.error(e));
         }
 
         async function updateProfile(name, slouch_sens, limit, stand_req, screen_limit, break_duration) {
@@ -365,8 +409,10 @@
         setInterval(refreshLiveTelemetry, 1000);
         setInterval(pollProfiles, 4000);
         
-        refreshLiveTelemetry();
-        pollProfiles();
+        window.onload = () => {
+            refreshLiveTelemetry();
+            pollProfiles();
+        };
     </script>
 </body>
 </html>

@@ -54,20 +54,18 @@ def get_metrics_slice() -> Any:
 
 @app.route('/api/profiles')
 def get_profiles() -> Any:
-    """Returns all registered user profiles."""
+    """Returns all registered user profiles directly from the tracker cache."""
     with state_mutex:
-        profiles_list = []
-        raw_profiles = db_conn.load_all_profiles()
-        for name, profile_data in raw_profiles.items():
-            profiles_list.append({
-                "user_name": name,
-                "slouch_sensitivity": profile_data["slouch_sensitivity"],
-                "session_limit": profile_data["session_limit"],
-                "stand_requirement": profile_data["stand_requirement"],
+        profiles_dict = {}
+        for name, profile_data in health_evaluator.profiles.items():
+            profiles_dict[name] = {
+                "slouch_sensitivity": profile_data.get("slouch_sensitivity", 15.0),
+                "session_limit": profile_data.get("session_limit", 2400),
+                "stand_requirement": profile_data.get("stand_requirement", 120),
                 "screen_gaze_limit": profile_data.get("screen_gaze_limit", 1200),
                 "ocular_break_duration": profile_data.get("ocular_break_duration", 20)
-            })
-        return jsonify(profiles_list)
+            }
+        return jsonify(profiles_dict)
 
 @app.route('/api/profile/create', methods=['POST'])
 def create_profile_endpoint() -> Any:

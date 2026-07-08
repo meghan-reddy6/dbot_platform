@@ -14,45 +14,38 @@ from core.biometrics import CrossPlatformInferenceManager
 logger = logging.getLogger("DeskBotV3.Tracking")
 state_mutex = threading.Lock()
 
-try:
-    import pyttsx3
-    HAVE_PYTTSX3 = True
-except ImportError:
-    HAVE_PYTTSX3 = False
-    print("[!] pyttsx3 not installed. Voice alerts will be muted.")
-
 class VoiceAlertDaemon:
     def __init__(self):
-        self.message_queue = queue.Queue()
-        self.running = True
-        self.last_played = {}
-        threading.Thread(target=self._worker, daemon=True).start()
-        
-    def _worker(self):
-        while self.running:
+        self.last_alert_time = 0.0
+        self.alert_cooldown = 20.0
+        self.audio_thread_active = False
+
+    def _say_via_subprocess(self, text_prompt: str):
+        def worker():
             try:
-                msg, category = self.message_queue.get(timeout=1.0)
-                import pyttsx3
-                import pythoncom
-                pythoncom.CoInitialize()
-                try:
-                    engine = pyttsx3.init()
-                    engine.say(msg)
-                    engine.runAndWait()
-                    del engine
-                finally:
-                    pythoncom.CoUninitialize()
-            except queue.Empty:
-                pass
+                import subprocess
+                import sys
+                import os
+                if sys.platform == "win32":
+                    ps_script = f"Add-Type -AssemblyName System.speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{text_prompt.replace(chr(39), chr(39)+chr(39))}')"
+                    subprocess.Popen(["powershell", "-Command", ps_script], creationflags=subprocess.CREATE_NO_WINDOW)
+                else:
+                    os.system(f"espeak '{text_prompt}' &")
             except Exception as e:
                 print(f"[VOICE DAEMON ERROR] {e}")
+            finally:
+                self.audio_thread_active = False
+                
+        threading.Thread(target=worker, daemon=True).start()
 
-    def dispatch(self, text: str, category: str, cooldown: float = 30.0) -> None:
-        now = time.time()
-        last = self.last_played.get(category, 0.0)
-        if now - last > cooldown:
-            self.last_played[category] = now
-            self.message_queue.put((text, category))
+    def dispatch(self, text: str, category: str = "general", cooldown: float = 30.0) -> None:
+        import time
+        current_time = time.time()
+        is_cooldown_passed = (current_time - self.last_alert_time > self.alert_cooldown) or (category == "registration")
+        if is_cooldown_passed and not self.audio_thread_active:
+            self.last_alert_time = current_time
+            self.audio_thread_active = True
+            self._say_via_subprocess(text)
 
 class Person:
     """
@@ -108,6 +101,7 @@ class Person:
         self.gaze_away_limit = 20.0
         self.screen_gaze_limit = 1200.0
         self.biometric_cutoff = 0.55
+        self.last_analytics_flush_time = 0.0
         
         self.baseline_torso_ratio = 0.0     
         self.calibrated_baseline_neck_pitch = 0.0           
@@ -141,9 +135,19 @@ class TrackerEngine:
         self.db_manager = db_manager
         import os
         import json
-        self.profiles_json_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles_cache.json')
+        self.profiles_json_path = os.path.abspath('profiles_cache.json')
         self.profiles = self.db_manager.load_all_profiles()
-        self._load_profiles_json()
+        
+        if os.path.exists(self.profiles_json_path):
+            with open(self.profiles_json_path, 'r') as f:
+                saved_cache = json.load(f)
+                for name, vectors in saved_cache.items():
+                    if name not in self.profiles:
+                        self.profiles[name] = {}
+                    self.profiles[name]["embeddings"] = vectors
+                print(f"[SYSTEM BOOT] Cold-boot telemetry successful! Loaded {len(saved_cache)} profiles from {self.profiles_json_path}")
+        else:
+            print(f"[SYSTEM BOOT] No existing profile cache found at {self.profiles_json_path}")
         
         self.inference_manager = CrossPlatformInferenceManager()
         self.voice_daemon = VoiceAlertDaemon()
@@ -151,7 +155,10 @@ class TrackerEngine:
         self.historical_users = {}
         for profile_name, profile_data in self.profiles.items():
             dummy_box = np.array([0, 0, 0, 0])
-            cold_person = Person(f"Person_hash_cold_{profile_name}", profile_data["embedding"], dummy_box)
+            first_emb = profile_data.get("embeddings", [None])[0]
+            if first_emb is None and "embedding" in profile_data:
+                first_emb = profile_data["embedding"]
+            cold_person = Person(f"Person_hash_cold_{profile_name}", first_emb, dummy_box)
             cold_person.name = profile_name
             cold_person.is_posture_calibrated = True
             self.historical_users[profile_name] = cold_person
@@ -168,6 +175,7 @@ class TrackerEngine:
         self.manual_recalibration_requested = False
         self.pending_registration_name = None
         self.trigger_recalibration = False
+        self._enrollment_flight_lock = False
 
     def _load_profiles_json(self):
         import json
@@ -192,6 +200,7 @@ class TrackerEngine:
     def _save_profiles_json(self):
         import json
         import threading
+        import os
         
         def bg_save():
             try:
@@ -199,11 +208,19 @@ class TrackerEngine:
                 with self.mutex:
                     for name, profile in self.profiles.items():
                         if "embeddings" in profile:
-                            data[name] = [v.tolist() for v in profile["embeddings"]]
+                            data[name] = [(v.tolist() if isinstance(v, np.ndarray) else v) for v in profile["embeddings"]]
                         elif "embedding" in profile:
-                            data[name] = [profile["embedding"].tolist()]
-                with open(self.profiles_json_path, 'w') as f:
+                            emb = profile["embedding"]
+                            data[name] = [emb.tolist() if isinstance(emb, np.ndarray) else emb]
+                
+                target_path = getattr(self, 'cache_path', getattr(self, 'profiles_json_path', 'profiles_cache.json'))
+                absolute_path = os.path.abspath(target_path)
+                
+                os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+                with open(absolute_path, 'w') as f:
                     json.dump(data, f)
+                    
+                print(f"[PERSISTENCE] Hard disk write SUCCESSFUL! File generated at: {absolute_path}")
             except Exception as e:
                 print(f"[PERSISTENCE] Background save failed: {e}")
                 
@@ -225,9 +242,9 @@ class TrackerEngine:
                     person.biometric_cutoff = profile_config_map.get("biometric_cutoff", 0.55)
 
     def _match_profile(self, embedding: np.ndarray, spatial_penalty: float = 0.0, box: list = None, w: int = 1920) -> Tuple[Optional[str], float]:
-        """Compares target embedding against registered database profiles using strict Nearest Neighbor matching."""
+        """Compares target embedding against registered database profiles using temporal consensus logic."""
         matched_db_profile_string = None
-        calculated_similarity = -1.0
+        highest_consensus = -1.0
         norm_embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
         
         for name, profile in self.profiles.items():
@@ -235,22 +252,29 @@ class TrackerEngine:
             if "embedding" in profile and len(db_embs) == 0:
                 db_embs = [profile["embedding"]]
                 
-            for db_emb in db_embs:
-                norm_template = db_emb / (np.linalg.norm(db_emb) + 1e-6)
-                cosine_similarity = np.dot(norm_embedding, norm_template)
+            if len(db_embs) == 0:
+                continue
                 
-                # Strict Nearest Neighbor: Absolute closest single match without penalties
-                if cosine_similarity > calculated_similarity:
-                    calculated_similarity = cosine_similarity
-                    matched_db_profile_string = name
+            sim_scores = []
+            for db_emb in db_embs:
+                db_emb_np = np.array(db_emb, dtype=np.float32)
+                norm_template = db_emb_np / (np.linalg.norm(db_emb_np) + 1e-6)
+                sim_scores.append(np.dot(norm_embedding, norm_template))
+                
+            top_score = max(sim_scores)
+            mean_score = sum(sim_scores) / len(sim_scores)
+            consensus_score = (top_score * 0.7) + (mean_score * 0.3)
+            
+            if consensus_score > highest_consensus:
+                highest_consensus = consensus_score
+                matched_db_profile_string = name
                     
-        # STRICT BIOMETRIC GATE: Score must exceed 0.93 to prevent generic artifact clustering
-        if calculated_similarity >= 0.93:
+        if highest_consensus >= 0.75:
             validated_profile_name = matched_db_profile_string
         else:
-            validated_profile_name = None
+            validated_profile_name = "Unknown"
             
-        return validated_profile_name, calculated_similarity
+        return validated_profile_name, highest_consensus
 
     def _dispatch_voice(self, text: str, category: str = "general", cooldown: float = 10.0) -> None:
         """Dispatches an asynchronous voice alert through the dedicated daemon queue."""
@@ -483,6 +507,7 @@ class TrackerEngine:
         import math
         import numpy as np
         
+
         detections = self.inference_manager.execute_stage1_detector(frame)
         self.frame_count += 1
         current_time = time.time()
@@ -498,21 +523,11 @@ class TrackerEngine:
                         person_to_register = tracked_person
                         break
                         
-                if person_to_register is not None:
+                if person_to_register is not None and hasattr(person_to_register, 'embedding'):
                     try:
-                        self.db_manager.create_profile(name, person_to_register.embedding)
-                        person_to_register.name = name
-                        person_to_register.state = "Calibrating"
-                        person_to_register.calibration_start_time = time.time()
-                        person_to_register.calibration_accumulator = []
-                        person_to_register.calibration_pitch_acc = []
-                        person_to_register.calibration_y_acc = []
-                        person_to_register.is_posture_calibrated = False
-                        person_to_register.calibration_announced = False
-                        
                         self.profiles[name] = {
-                            "embedding": person_to_register.embedding,
-                            "embeddings": [person_to_register.embedding],
+                            "embeddings": [person_to_register.embedding.tolist()],
+                            "registration_timestamp": current_time,
                             "slouch_sensitivity": 15.0,
                             "session_limit": 1200,
                             "biometric_cutoff": 0.35,
@@ -520,10 +535,16 @@ class TrackerEngine:
                             "ocular_break_duration": 20,
                             "screen_gaze_limit": 1200
                         }
+                        person_to_register.name = name
+                        person_to_register.verified_name = name
+                        person_to_register.verification_status = "VERIFIED"
+                        person_to_register.state = "Tracking Active"
+                        person_to_register.lost_grace_timer = 0.0
                         self._save_profiles_json()
-                        print(f"[TRACKING] Safely registered new user {name}")
+                        self._dispatch_voice(f"Registration complete for {name}. Instant 1-frame profile locked.", category="registration")
+                        print(f"[TRACKING] Instant 1-frame registration complete for {name}")
                     except Exception as e:
-                        print(f"[TRACKING] Failed safe registration: {e}")
+                        print(f"[TRACKING] Failed instant registration: {e}")
                 self.pending_registration_name = None
                 
             # Unified trigger flag consolidating manual UI callbacks
@@ -773,7 +794,7 @@ class TrackerEngine:
                 
                 iom = area_inter / max(min(area_a, area_b), 1e-6)
                 
-                if iom > 0.70:
+                if iom > 0.55:
                     is_contour_ghost = True
                     break
                     
@@ -850,7 +871,7 @@ class TrackerEngine:
         # ---------------------------------------------------------
         # PHASE 3: UNIFIED LIFECYCLE EVALUATION AND TEMPORAL TIME DECAY
         # ---------------------------------------------------------
-        PROTECTED_STATES = {"Calibrating", "Posture Deficit Alert", "Session Limit Reached - Stand Up!"}
+        PROTECTED_STATES = {"Calibrating", "Posture Deficit Alert", "Session Limit Reached - Stand Up!", "Searching / Re-acquiring", "Absent", "Enrolling Multi-View"}
         for act_id in list(active_ids):
             person = self.tracked_persons[act_id]
             dt_step = current_time - person.last_update if person.last_update else 0.033
@@ -890,9 +911,10 @@ class TrackerEngine:
                 person.biometric_match_counter = 0
                 if getattr(person, 'verification_status', 'UNKNOWN') in ["VERIFIED", "VERIFYING"]:
                     person.lost_grace_timer += dt_step
-                    if person.lost_grace_timer > 1.5:
+                    if person.lost_grace_timer > 4.5:
                         print(f"[TRACKING] Grace window expired for {person.name}. Dropping state.")
                         person.state = "Searching / Re-acquiring"
+                        person.name = "Unknown"
                         person.verification_status = "UNKNOWN"
                         person.biometric_match_counter = 0
                         person.candidate_name = None
@@ -904,9 +926,10 @@ class TrackerEngine:
                         elif person.verification_status == "VERIFYING":
                             person.state = "Verifying Identity"
                 else:
-                    person.verification_status = "UNKNOWN"
-                    person.name = "Unknown"
-                    person.state = "Unregistered Guest"
+                    if person.state != "Enrolling Multi-View":
+                        person.verification_status = "UNKNOWN"
+                        person.name = "Unknown"
+                        person.state = "Unregistered Guest"
 
         # ---------------------------------------------------------
         # FINAL CLEANUP & POSTURE EVALUATION
@@ -915,6 +938,11 @@ class TrackerEngine:
             matched_person = det.get("matched_person")
             if not matched_person:
                 continue
+                
+            if det is not None and matched_person.verification_status == "VERIFIED":
+                if matched_person.state in ["Absent", "Searching / Re-acquiring", "Posture Deficit Alert"]:
+                    matched_person.state = "Tracking Active"
+                    matched_person.lost_grace_timer = 0.0
                 
             box = det["box"]
             pose = det["pose"]
@@ -927,6 +955,54 @@ class TrackerEngine:
             matched_person.pose = pose
             if "embedding" in det:
                 matched_person.embedding = det["embedding"]
+                
+                if matched_person.name == "Unknown" or matched_person.verification_status != "VERIFIED":
+                    best_name, sim = self._match_profile(matched_person.embedding)
+                    print(f"[RE-ACQUISITION SCAN] Evaluating live track... Best Match: {best_name} (Sim: {sim:.3f})")
+                    
+                    if not hasattr(matched_person, '_evidence_buffer'):
+                        matched_person._evidence_buffer = []
+                        
+                    if best_name != "Unknown" and best_name is not None:
+                        matched_person._evidence_buffer.append(best_name)
+                    else:
+                        matched_person._evidence_buffer.append("None")
+                        
+                    if len(matched_person._evidence_buffer) > 8:
+                        matched_person._evidence_buffer.pop(0)
+                        
+                    if len(matched_person._evidence_buffer) == 8:
+                        from collections import Counter
+                        counts = Counter(matched_person._evidence_buffer)
+                        top_candidate, count = counts.most_common(1)[0]
+                        
+                        if top_candidate != "None" and count >= 4:
+                            matched_person.name = top_candidate
+                            matched_person.verified_name = top_candidate
+                            matched_person.verification_status = "VERIFIED"
+                            matched_person.state = "Tracking Active"
+                            matched_person.lost_grace_timer = 0.0
+                            matched_person._evidence_buffer.clear()
+                            print(f"[TRACKING] Temporal Consensus Achieved! Restored identity: {top_candidate}")
+                        
+                if matched_person.verification_status == "VERIFIED" and matched_person.state == "Tracking Active":
+                    profile = self.profiles.get(matched_person.name)
+                    if profile and "embeddings" in profile and len(profile["embeddings"]) < 15:
+                        db_embs = profile["embeddings"]
+                        norm_live = matched_person.embedding / (np.linalg.norm(matched_person.embedding) + 1e-6)
+                        
+                        max_sim = 0.0
+                        for db_emb in db_embs:
+                            db_emb_np = np.array(db_emb, dtype=np.float32)
+                            norm_db = db_emb_np / (np.linalg.norm(db_emb_np) + 1e-6)
+                            sim = np.dot(norm_live, norm_db)
+                            if sim > max_sim: max_sim = sim
+                            
+                        if 0.78 <= max_sim <= 0.93:
+                            profile["embeddings"].append(matched_person.embedding.tolist())
+                            self._save_profiles_json()
+                            print(f"[TRACKING] Background Cluster Accumulation: Captured new angle for {matched_person.name} (sim: {max_sim:.3f}). Total views: {len(profile['embeddings'])}")
+
             matched_person.pitch = (matched_person.pitch * 0.6) + (det["pitch"] * 0.4)
             matched_person.yaw = det["yaw"]
             matched_person.roll = det["roll"]
@@ -950,11 +1026,33 @@ class TrackerEngine:
                 matched_person.gaze_x = gaze_x
                 matched_person.is_looking_away = is_looking_away
                 
+                cached_status = getattr(matched_person, 'verification_status', 'UNKNOWN')
+                cached_vname = getattr(matched_person, 'verified_name', None)
+                cached_name = getattr(matched_person, 'name', 'Unknown')
+                cached_timer = getattr(matched_person, 'lost_grace_timer', 0.0)
+                
                 self._evaluate_single_target_health(matched_person, pose, current_ratio, dt, current_time, frame_shape)
+                
+                matched_person.verification_status = cached_status
+                matched_person.verified_name = cached_vname
+                matched_person.name = cached_name
+                matched_person.lost_grace_timer = cached_timer
                 
             if matched_person.state != getattr(matched_person, "last_state", "Unknown"):
                 print(f"[STATE CHANGE] {matched_person.name} transitioned from {getattr(matched_person, 'last_state', 'Unknown')} -> {matched_person.state}")
                 matched_person.last_state = matched_person.state
+                
+            if current_time - getattr(matched_person, 'last_analytics_flush_time', 0.0) >= 10.0:
+                self.db_manager.log_analytics_flush(
+                    user_name=matched_person.name,
+                    session_state=matched_person.state,
+                    duration_seconds=10.0,
+                    continuous_sitting_seconds=matched_person.sitting_duration_clock,
+                    continuous_gaze_seconds=matched_person.screen_gaze_accumulation_timer,
+                    average_head_pitch=getattr(matched_person, 'smoothed_pitch', matched_person.pitch),
+                    ocular_break_accumulator=matched_person.ocular_break_timer
+                )
+                matched_person.last_analytics_flush_time = current_time
 
             # Reset frame validation for next loop
             matched_person.frame_val_name = None

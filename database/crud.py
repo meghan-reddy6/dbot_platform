@@ -45,6 +45,19 @@ class DatabaseManager:
                 duration REAL
             )
         ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS user_analytics_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                user_name TEXT,
+                session_state TEXT,
+                duration_seconds REAL,
+                continuous_sitting_seconds REAL,
+                continuous_gaze_seconds REAL,
+                average_head_pitch REAL,
+                ocular_break_accumulator REAL
+            )
+        ''')
         conn.commit()
         conn.close()
 
@@ -98,5 +111,16 @@ class DatabaseManager:
         c = conn.cursor()
         c.execute("INSERT INTO metrics (user_name, event_type, duration) VALUES (?, ?, ?)", 
                   (user_name, event_type, duration))
+        conn.commit()
+        conn.close()
+
+    def log_analytics_flush(self, user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO user_analytics_logs (
+                user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator))
         conn.commit()
         conn.close()
