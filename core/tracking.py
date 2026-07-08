@@ -768,6 +768,55 @@ class TrackerEngine:
         active_track_ids = set()
         
         if detections is not None and len(detections) > 0:
+            # 2a. INTRA-TRACK IOU SUPPRESSION (OVERLAP DEDUPLICATION)
+            if len(detections) > 1:
+                skip_indices = set()
+                verified_tracks = [p for p in self.tracked_persons.values() if p.verification_status == "VERIFIED" or p.name == "Meghan"]
+                for i in range(len(detections)):
+                    if i in skip_indices: continue
+                    box_i = detections[i]["box"]
+                    area_i = (box_i[2] - box_i[0]) * (box_i[3] - box_i[1])
+                    for j in range(i + 1, len(detections)):
+                        if j in skip_indices: continue
+                        box_j = detections[j]["box"]
+                        area_j = (box_j[2] - box_j[0]) * (box_j[3] - box_j[1])
+                        
+                        inter_x1 = max(box_i[0], box_j[0])
+                        inter_y1 = max(box_i[1], box_j[1])
+                        inter_x2 = min(box_i[2], box_j[2])
+                        inter_y2 = min(box_i[3], box_j[3])
+                        
+                        if inter_x2 > inter_x1 and inter_y2 > inter_y1:
+                            inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                            iou = inter_area / float(area_i + area_j - inter_area + 1e-6)
+                            
+                            if iou > 0.60:
+                                i_maps = False
+                                j_maps = False
+                                for vp in verified_tracks:
+                                    p_box = vp.box
+                                    p_cx, p_cy = (p_box[0] + p_box[2]) / 2.0, (p_box[1] + p_box[3]) / 2.0
+                                    p_width = max(p_box[2] - p_box[0], 1e-6)
+                                    cx_i, cy_i = (box_i[0] + box_i[2]) / 2.0, (box_i[1] + box_i[3]) / 2.0
+                                    cx_j, cy_j = (box_j[0] + box_j[2]) / 2.0, (box_j[1] + box_j[3]) / 2.0
+                                    
+                                    norm_dist_i = math.sqrt((cx_i - p_cx)**2 + (cy_i - p_cy)**2) / p_width
+                                    norm_dist_j = math.sqrt((cx_j - p_cx)**2 + (cy_j - p_cy)**2) / p_width
+                                    
+                                    if norm_dist_i < 0.25: i_maps = True
+                                    if norm_dist_j < 0.25: j_maps = True
+                                    
+                                if i_maps and not j_maps:
+                                    skip_indices.add(j)
+                                elif j_maps and not i_maps:
+                                    skip_indices.add(i)
+                                else:
+                                    if area_i > area_j:
+                                        skip_indices.add(j)
+                                    else:
+                                        skip_indices.add(i)
+                detections = [d for idx, d in enumerate(detections) if idx not in skip_indices]
+
             remaining_tracks = list(self.tracked_persons.values())
             
             for det in detections:
