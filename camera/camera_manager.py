@@ -4,7 +4,8 @@ import threading
 import time
 import platform
 
-class DynamicCameraIngestion:
+
+class CameraManager:
     def __init__(self, camera_index=0):
         self.frame_queue = queue.Queue(maxsize=1)
         self.running = True
@@ -16,23 +17,27 @@ class DynamicCameraIngestion:
     def start(self):
         # 1. Attempt Qualcomm Hardware-Accelerated GStreamer Pipeline (Linux aarch64)
         if self.os_type == "Linux" and "aarch64" in self.arch_type:
-            print(f"[*] Target: Qualcomm Linux ARM64. Initializing Hardware IM SDK Pipeline...")
+            print(
+                "[*] Target: Qualcomm Linux ARM64. Initializing Hardware IM SDK Pipeline..."
+            )
             gst_pipeline = (
                 f"v4l2src device=/dev/video{self.camera_index} ! "
                 "image/jpeg,width=1920,height=1080,framerate=30/1 ! "
                 "qtimididec ! videoconvert ! video/x-raw,format=BGR ! appsink name=sink drop=true max-buffers=1"
             )
             self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-            
+
             if self.cap is not None and self.cap.isOpened():
                 print("[*] Qualcomm GStreamer Pipeline Active.")
                 self._start_worker()
                 return
             else:
-                print("[!] GStreamer initialization failed. Falling back to native V4L2...")
+                print(
+                    "[!] GStreamer initialization failed. Falling back to native V4L2..."
+                )
 
         # 2. Native Desktop Fallbacks
-        print(f"[*] Initializing Native OS VideoCapture Backend...")
+        print("[*] Initializing Native OS VideoCapture Backend...")
         if self.os_type == "Windows":
             backend = cv2.CAP_DSHOW
         elif self.os_type == "Darwin":
@@ -41,7 +46,7 @@ class DynamicCameraIngestion:
             backend = cv2.CAP_V4L2
 
         self.cap = cv2.VideoCapture(self.camera_index, backend)
-        
+
         # Safe resolution fallback
         if self.cap is not None and self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
@@ -68,6 +73,7 @@ class DynamicCameraIngestion:
                         self.frame_queue.put_nowait(frame)
                     except queue.Empty:
                         pass
+
         threading.Thread(target=worker, daemon=True).start()
 
     def get_frame(self, timeout=1.0):

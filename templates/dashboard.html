@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DeskBot V3 Pro Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { margin: 0; font-family: 'Inter', 'Segoe UI', sans-serif; background: #0b0f19; color: #fff; overflow-x: hidden; }
         .bg-blobs { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; background: radial-gradient(circle at 15% 50%, rgba(76, 29, 149, 0.15), transparent 35%), radial-gradient(circle at 85% 30%, rgba(14, 165, 233, 0.15), transparent 35%); }
@@ -101,7 +102,17 @@
             .video-pane, .metrics-pane { width: 100%; flex: none; }
         }
 
-    </style>
+    
+.slouch-alert {
+    animation: pulse-red-glow 2s infinite;
+}
+
+@keyframes pulse-red-glow {
+    0% { background: rgba(30, 0, 0, 0.4); box-shadow: 0 0 10px rgba(255, 0, 0, 0.4), inset 0 0 10px rgba(255, 0, 0, 0.2); border: 1px solid rgba(255, 0, 0, 0.5); }
+    50% { background: rgba(80, 0, 0, 0.6); box-shadow: 0 0 30px rgba(255, 0, 0, 0.9), inset 0 0 20px rgba(255, 0, 0, 0.5); border: 1px solid rgba(255, 0, 0, 1.0); }
+    100% { background: rgba(30, 0, 0, 0.4); box-shadow: 0 0 10px rgba(255, 0, 0, 0.4), inset 0 0 10px rgba(255, 0, 0, 0.2); border: 1px solid rgba(255, 0, 0, 0.5); }
+}
+</style>
 </head>
 <body>
     <div class="bg-blobs"></div>
@@ -120,6 +131,21 @@
             
             <!-- Right Pane (40% Width / flex: 1) -->
             <div id="targets-container" class="metrics-pane"></div>
+        </div>
+        
+        <!-- ANALYTICS & DIAGNOSTICS ROW -->
+        <div class="split-layout" style="margin-top: 1rem; margin-bottom: 3rem;">
+            <div class="glass-card" style="flex: 1.4;">
+                <h3 style="margin-top: 0; color: #e2e8f0; font-weight: 400; font-size: 1.5rem;">Historical Posture Analytics</h3>
+                <canvas id="analyticsChart" style="width: 100%; max-height: 250px;"></canvas>
+            </div>
+            
+            <div class="glass-card" style="flex: 1;">
+                <h3 style="margin-top: 0; color: #e2e8f0; font-weight: 400; font-size: 1.5rem;">System Diagnostics</h3>
+                <div id="diagnostics-container" style="display: flex; flex-direction: column; gap: 0.8rem; color: #cbd5e1; font-size: 0.95rem;">
+                    <div>Loading system diagnostics...</div>
+                </div>
+            </div>
         </div>
         
         <!-- PROFILE MANAGEMENT INTERFACE (Bottom span 100%) -->
@@ -188,6 +214,10 @@
                     else if (isWarning) cardClass += " warning";
                     else if (isCalibrating) cardClass += " calibrating";
                     
+                    if (t.state && t.state.includes("Posture Deficit")) {
+                        cardClass += " slouch-alert";
+                    }
+                    
                     const stateStr = t.state || "";
                     const isCalib = stateStr.includes("Calibrating");
                     const isActiveSit = stateStr.includes("Tracking Active") || stateStr.includes("Looking Away");
@@ -197,23 +227,33 @@
                     const isStand = stateStr === "Standing";
                     const isCoast = !isCalib && !isActiveSit && !isSlouch && !isOcular && !isSession && !isStand;
 
-                    const renderStateBlock = (active, emoji, label, color) => `
+                    const renderStateBlock = (active, iconSvg, label, color) => `
                         <div style="flex: 1; text-align: center; padding: 10px 2px; border-radius: 8px; background: rgba(0,0,0,0.3); transition: all 0.4s ease;
                                     ${active ? `opacity: 1.0; border: 1px solid ${color}; box-shadow: 0 0 16px ${color}A0; filter: blur(0px); grayscale(0%);` 
                                              : `opacity: 0.20; border: 1px solid transparent; filter: blur(1.5px) grayscale(70%);`}">
-                            <div style="font-size: 1.4rem; margin-bottom: 4px;">${emoji}</div>
+                            <div style="width: 24px; height: 24px; margin: 0 auto 4px auto; color: ${active ? color : '#94a3b8'};">
+                                ${iconSvg}
+                            </div>
                             <div style="font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.1; color: ${active ? color : '#cbd5e1'};">${label}</div>
                         </div>
                     `;
 
+                    const iconCalib = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="animate-spin" style="width:100%;height:100%;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+                    const iconActive = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><circle cx="12" cy="7" r="4"></circle><path d="M5.5 21v-8a6.5 6.5 0 0 1 13 0v8"></path></svg>';
+                    const iconSlouch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+                    const iconOcular = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+                    const iconLimit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>';
+                    const iconStand = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>'; 
+                    const iconCoast = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>';
+
                     const statesHtml = `
-                        ${renderStateBlock(isCalib, "⚙️", "Calibrating", "#38bdf8")}
-                        ${renderStateBlock(isActiveSit, "🧘", "Active", "#10b981")}
-                        ${renderStateBlock(isSlouch, "⚠️", "Posture", "#f59e0b")}
-                        ${renderStateBlock(isOcular, "👀", "Ocular", "#a855f7")}
-                        ${renderStateBlock(isSession, "🚨", "Limit", "#ef4444")}
-                        ${renderStateBlock(isStand, "🧍", "Standing", "#3b82f6")}
-                        ${renderStateBlock(isCoast, "⏸️", "Searching", "#64748b")}
+                        ${renderStateBlock(isCalib, iconCalib, "Calibrating", "#38bdf8")}
+                        ${renderStateBlock(isActiveSit, iconActive, "Active", "#10b981")}
+                        ${renderStateBlock(isSlouch, iconSlouch, "Posture", "#f59e0b")}
+                        ${renderStateBlock(isOcular, iconOcular, "Ocular", "#a855f7")}
+                        ${renderStateBlock(isSession, iconLimit, "Limit", "#ef4444")}
+                        ${renderStateBlock(isStand, iconStand, "Standing", "#3b82f6")}
+                        ${renderStateBlock(isCoast, iconCoast, "Searching", "#64748b")}
                     `;
                     
                     let card = document.getElementById(`target-card-${t.id}`);
@@ -266,12 +306,20 @@
                             
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
                                 <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
-                                    <div class="metric-label">Head Pitch</div>
+                                    <div class="metric-label">Neck Pitch</div>
                                     <div id="pitch-val-${t.id}" class="metric-val"></div>
+                                </div>
+                                <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+                                    <div class="metric-label">Spine Lateral</div>
+                                    <div id="spine-val-${t.id}" class="metric-val"></div>
+                                </div>
+                                <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+                                    <div class="metric-label">Shoulder Roll</div>
+                                    <div id="shoulder-val-${t.id}" class="metric-val"></div>
                                 </div>
                                 <div class="metric-card" style="background: rgba(15,23,42,0.4); padding: 1.2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03);">
                                     <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Ocular Break Accumulator</div>
-                                    <div id="ocular-val-${t.id}" style="font-size: 2.2rem; font-weight: 700; color: #fff; margin-top: 0.5rem;"></div>
+                                    <div id="ocular-val-${t.id}" style="font-size: 1.8rem; font-weight: 700; color: #fff; margin-top: 0.5rem;"></div>
                                 </div>
                             </div>
                         `;
@@ -295,6 +343,8 @@
                     document.getElementById(`gaze-bar-${t.id}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
                     
                     document.getElementById(`pitch-val-${t.id}`).textContent = `${headPitch}°`;
+                    document.getElementById(`spine-val-${t.id}`).textContent = `${Math.round(t.spine_alignment || 0)}°`;
+                    document.getElementById(`shoulder-val-${t.id}`).textContent = `${Math.round(t.shoulder_alignment || 0)}°`;
                     document.getElementById(`ocular-val-${t.id}`).textContent = `${t.ocular_break_current}s / ${t.ocular_break_max}s`;
                 });
                 
@@ -327,6 +377,7 @@
                         <th>Required Stand Duration (Seconds)</th>
                         <th>Screen Gaze Limit (Minutes)</th>
                         <th>Ocular Break Duration (Seconds)</th>
+                        <th>History Export</th>
                         <th>Actions</th>
                     </tr>`;
                 
@@ -342,6 +393,10 @@
                             <td><input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.stand_requirement}s</span></td>
                             <td><input type="range" min="5" max="60" step="5" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
                             <td><input type="range" min="5" max="120" step="5" value="${p.ocular_break_duration}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, this.value)"> <span>${p.ocular_break_duration}s</span></td>
+                            <td>
+                                <a href="/api/export/csv/${username}" target="_blank" style="color: #10b981; text-decoration: none; font-size: 0.85rem; margin-right: 8px;">CSV</a>
+                                <a href="/api/export/json/${username}" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.85rem;">JSON</a>
+                            </td>
                             <td><button class="danger" onclick="deleteProfile('${username}')">Delete Profile</button></td>
                         </tr>
                     `;
@@ -406,12 +461,117 @@
             refreshLiveTelemetry();
         }
 
+        async function pollSystemDiagnostics() {
+            try {
+                const res = await fetch('/api/system/health');
+                const health = await res.json();
+                
+                const diagHtml = `
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>System Architecture</span> <strong style="color: #38bdf8;">${health.platform} ${health.arch}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Edge NPU Node</span> <strong style="color: ${health.is_embedded ? '#10b981' : '#f59e0b'};">${health.is_embedded ? 'TRUE' : 'FALSE'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Hardware Accl. (GPU/NPU)</span> <strong style="color: ${(health.has_gpu || health.has_npu) ? '#10b981' : '#f59e0b'};">${(health.has_gpu || health.has_npu) ? 'ACTIVE' : 'FALLBACK'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Total Available RAM</span> <strong style="color: #fff;">${health.ram_gb.toFixed(2)} GB</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>Live Tracked Sessions</span> <strong style="color: #38bdf8;">${health.tracked_targets}</strong>
+                    </div>
+                `;
+                document.getElementById('diagnostics-container').innerHTML = diagHtml;
+            } catch (e) {
+                console.error("System diagnostics error", e);
+            }
+        }
+
+        let analyticsChart = null;
+
+        async function pollHistoricalAnalytics() {
+            // Pick the first tracked target from live telemetry as primary user to chart
+            const container = document.getElementById('targets-container');
+            if (!container || container.children.length === 0 || container.innerHTML.includes('offline')) return;
+            
+            // Hacky extraction of primary user name
+            let primaryUser = null;
+            const nameEl = container.querySelector('[id^="name-"]');
+            if (nameEl && nameEl.textContent) {
+                primaryUser = nameEl.textContent;
+            }
+            if (!primaryUser || primaryUser === "Unknown") return;
+
+            try {
+                const res = await fetch(`/api/history/${primaryUser}`);
+                let historyData = await res.json();
+                
+                // Reverse to show chronological order
+                historyData = historyData.reverse();
+
+                const labels = historyData.map(d => new Date(d.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}));
+                const pitchData = historyData.map(d => d.average_head_pitch || 0);
+                const spineData = historyData.map(d => d.spine_alignment || 0);
+
+                if (analyticsChart) {
+                    analyticsChart.data.labels = labels;
+                    analyticsChart.data.datasets[0].data = pitchData;
+                    analyticsChart.data.datasets[1].data = spineData;
+                    analyticsChart.update('none'); // no animation for smooth polling
+                } else {
+                    const ctx = document.getElementById('analyticsChart').getContext('2d');
+                    analyticsChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                {
+                                    label: 'Neck Pitch (°)',
+                                    data: pitchData,
+                                    borderColor: '#38bdf8',
+                                    tension: 0.3,
+                                    fill: false
+                                },
+                                {
+                                    label: 'Spine Lateral (°)',
+                                    data: spineData,
+                                    borderColor: '#f59e0b',
+                                    tension: 0.3,
+                                    fill: false
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { labels: { color: '#94a3b8' } }
+                            },
+                            scales: {
+                                x: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                                y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                            },
+                            animation: { duration: 0 }
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error("Historical analytics error", e);
+            }
+        }
+
         setInterval(refreshLiveTelemetry, 1000);
         setInterval(pollProfiles, 4000);
+        setInterval(pollSystemDiagnostics, 5000);
+        setInterval(pollHistoricalAnalytics, 10000);
         
         window.onload = () => {
             refreshLiveTelemetry();
             pollProfiles();
+            pollSystemDiagnostics();
+            pollHistoricalAnalytics();
         };
     </script>
 </body>

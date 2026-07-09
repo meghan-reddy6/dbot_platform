@@ -2,7 +2,8 @@ import sqlite3
 import numpy as np
 import os
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'wellness_logs.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "wellness_logs.db")
+
 
 class DatabaseManager:
     def __init__(self):
@@ -11,7 +12,7 @@ class DatabaseManager:
     def _init_db(self):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_name TEXT PRIMARY KEY,
                 face_embedding BLOB,
@@ -22,21 +23,27 @@ class DatabaseManager:
                 ocular_break_duration INTEGER DEFAULT 20,
                 screen_gaze_limit INTEGER DEFAULT 1200
             )
-        ''')
+        """)
         try:
-            c.execute("ALTER TABLE users ADD COLUMN stand_requirement INTEGER DEFAULT 180")
+            c.execute(
+                "ALTER TABLE users ADD COLUMN stand_requirement INTEGER DEFAULT 180"
+            )
         except sqlite3.OperationalError:
             pass
         try:
-            c.execute("ALTER TABLE users ADD COLUMN ocular_break_duration INTEGER DEFAULT 20")
+            c.execute(
+                "ALTER TABLE users ADD COLUMN ocular_break_duration INTEGER DEFAULT 20"
+            )
         except sqlite3.OperationalError:
             pass
         try:
-            c.execute("ALTER TABLE users ADD COLUMN screen_gaze_limit INTEGER DEFAULT 1200")
+            c.execute(
+                "ALTER TABLE users ADD COLUMN screen_gaze_limit INTEGER DEFAULT 1200"
+            )
         except sqlite3.OperationalError:
             pass
-            
-        c.execute('''
+
+        c.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_name TEXT,
@@ -44,8 +51,8 @@ class DatabaseManager:
                 event_type TEXT,
                 duration REAL
             )
-        ''')
-        c.execute('''
+        """)
+        c.execute("""
             CREATE TABLE IF NOT EXISTS user_analytics_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -55,27 +62,65 @@ class DatabaseManager:
                 continuous_sitting_seconds REAL,
                 continuous_gaze_seconds REAL,
                 average_head_pitch REAL,
-                ocular_break_accumulator REAL
+                ocular_break_accumulator REAL,
+                spine_alignment REAL DEFAULT 0.0,
+                shoulder_alignment REAL DEFAULT 0.0
             )
-        ''')
+        """)
+        try:
+            c.execute(
+                "ALTER TABLE user_analytics_logs ADD COLUMN spine_alignment REAL DEFAULT 0.0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute(
+                "ALTER TABLE user_analytics_logs ADD COLUMN shoulder_alignment REAL DEFAULT 0.0"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
         conn.close()
 
-    def create_profile(self, user_name, face_embedding, session_limit=1200, slouch_sensitivity=15.0, biometric_cutoff=0.35, stand_requirement=180, ocular_break_duration=20, screen_gaze_limit=1200):
+    def create_profile(
+        self,
+        user_name,
+        face_embedding,
+        session_limit=1200,
+        slouch_sensitivity=15.0,
+        biometric_cutoff=0.35,
+        stand_requirement=180,
+        ocular_break_duration=20,
+        screen_gaze_limit=1200,
+    ):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                  (user_name, face_embedding.tobytes(), session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit))
+        c.execute(
+            "INSERT OR REPLACE INTO users (user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_name,
+                face_embedding.tobytes(),
+                session_limit,
+                slouch_sensitivity,
+                biometric_cutoff,
+                stand_requirement,
+                ocular_break_duration,
+                screen_gaze_limit,
+            ),
+        )
         conn.commit()
         conn.close()
 
     def load_all_profiles(self):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit FROM users")
+        c.execute(
+            "SELECT user_name, face_embedding, session_limit, slouch_sensitivity, biometric_cutoff, stand_requirement, ocular_break_duration, screen_gaze_limit FROM users"
+        )
         rows = c.fetchall()
         conn.close()
-        
+
         profiles = {}
         for row in rows:
             user_name = row[0]
@@ -87,15 +132,32 @@ class DatabaseManager:
                 "biometric_cutoff": row[4],
                 "stand_requirement": row[5] if row[5] is not None else 180,
                 "ocular_break_duration": row[6] if row[6] is not None else 20,
-                "screen_gaze_limit": row[7] if row[7] is not None else 1200
+                "screen_gaze_limit": row[7] if row[7] is not None else 1200,
             }
         return profiles
 
-    def update_profile(self, user_name, slouch_sensitivity, session_limit, stand_requirement, screen_gaze_limit, ocular_break_duration):
+    def update_profile(
+        self,
+        user_name,
+        slouch_sensitivity,
+        session_limit,
+        stand_requirement,
+        screen_gaze_limit,
+        ocular_break_duration,
+    ):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("UPDATE users SET slouch_sensitivity = ?, session_limit = ?, stand_requirement = ?, screen_gaze_limit = ?, ocular_break_duration = ? WHERE user_name = ?", 
-                  (slouch_sensitivity, session_limit, stand_requirement, screen_gaze_limit, ocular_break_duration, user_name))
+        c.execute(
+            "UPDATE users SET slouch_sensitivity = ?, session_limit = ?, stand_requirement = ?, screen_gaze_limit = ?, ocular_break_duration = ? WHERE user_name = ?",
+            (
+                slouch_sensitivity,
+                session_limit,
+                stand_requirement,
+                screen_gaze_limit,
+                ocular_break_duration,
+                user_name,
+            ),
+        )
         conn.commit()
         conn.close()
 
@@ -105,22 +167,67 @@ class DatabaseManager:
         c.execute("DELETE FROM users WHERE user_name = ?", (user_name,))
         conn.commit()
         conn.close()
-        
+
     def log_session_metrics(self, user_name, event_type, duration):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT INTO metrics (user_name, event_type, duration) VALUES (?, ?, ?)", 
-                  (user_name, event_type, duration))
+        c.execute(
+            "INSERT INTO metrics (user_name, event_type, duration) VALUES (?, ?, ?)",
+            (user_name, event_type, duration),
+        )
         conn.commit()
         conn.close()
 
-    def log_analytics_flush(self, user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator):
+    def log_analytics_flush(
+        self,
+        user_name,
+        session_state,
+        duration_seconds,
+        continuous_sitting_seconds,
+        continuous_gaze_seconds,
+        average_head_pitch,
+        ocular_break_accumulator,
+        spine_alignment=0.0,
+        shoulder_alignment=0.0,
+    ):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute('''
+        c.execute(
+            """
             INSERT INTO user_analytics_logs (
-                user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator))
+                user_name, session_state, duration_seconds, continuous_sitting_seconds, continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator, spine_alignment, shoulder_alignment
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                user_name,
+                session_state,
+                duration_seconds,
+                continuous_sitting_seconds,
+                continuous_gaze_seconds,
+                average_head_pitch,
+                ocular_break_accumulator,
+                spine_alignment,
+                shoulder_alignment,
+            ),
+        )
         conn.commit()
         conn.close()
+
+    def get_user_analytics(self, user_name, limit=100):
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT timestamp, session_state, duration_seconds, continuous_sitting_seconds, 
+                   continuous_gaze_seconds, average_head_pitch, ocular_break_accumulator,
+                   spine_alignment, shoulder_alignment
+            FROM user_analytics_logs 
+            WHERE user_name = ? 
+            ORDER BY timestamp DESC LIMIT ?
+        """,
+            (user_name, limit),
+        )
+        rows = c.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
