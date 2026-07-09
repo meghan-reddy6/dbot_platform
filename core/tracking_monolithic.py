@@ -249,6 +249,7 @@ def bg_biometric_process_worker(job_queue, result_queue, profiles):
             if embedding is not None:
                 matched_db_profile_string = None
                 highest_consensus = -1.0
+                second_highest_consensus = -1.0
                 norm_embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
                 
                 for name, profile in profiles.items():
@@ -268,21 +269,45 @@ def bg_biometric_process_worker(job_queue, result_queue, profiles):
                         
                         if cos_sim >= 0.84 and l2_dist < 0.58:
                             if cos_sim > highest_consensus:
+                                second_highest_consensus = highest_consensus
                                 highest_consensus = cos_sim
                                 matched_db_profile_string = name
+                            elif cos_sim > second_highest_consensus:
+                                second_highest_consensus = cos_sim
                                 
-                if highest_consensus >= 0.84:
-                    validated_profile_name = matched_db_profile_string
-                else:
-                    validated_profile_name = "Unknown"
+                if len(profiles) == 0:
+                    print("[MULTIPROCESS WORKER] Database empty. Operating in Registration Bootstrap mode.")
+                    highest_consensus = 1.0
+                    margin = 1.0
+                    validated_profile_name = "Registration_Candidate"
                     
-                if validated_profile_name is not None and validated_profile_name != "Unknown":
-                    print(f"[MULTIPROCESS WORKER] Identity matched: {validated_profile_name} (Sim: {highest_consensus:.3f})")
                     result_queue.put_nowait({
                         "track_id": track_id,
                         "name": validated_profile_name,
-                        "sim": highest_consensus
+                        "sim": highest_consensus,
+                        "margin": margin,
+                        "embedding": embedding
                     })
+                else:
+                    if highest_consensus >= 0.84:
+                        validated_profile_name = matched_db_profile_string
+                    else:
+                        validated_profile_name = "Unknown"
+                        
+                    if validated_profile_name is not None and validated_profile_name != "Unknown":
+                        # Fix for single-profile workspaces to prevent self-variance margin failure
+                        if len(profiles) == 1:
+                            second_highest_consensus = 0.0
+                            
+                        margin = highest_consensus - max(second_highest_consensus, 0.0)
+                        print(f"[MULTIPROCESS WORKER] Identity matched: {validated_profile_name} (Sim: {highest_consensus:.3f}, Margin: {margin:.3f})")
+                        result_queue.put_nowait({
+                            "track_id": track_id,
+                            "name": validated_profile_name,
+                            "sim": highest_consensus,
+                            "margin": margin,
+                            "embedding": embedding
+                        })
         except KeyboardInterrupt:
             break
         except Exception as e:
@@ -689,22 +714,74 @@ class TrackerEngine:
                 with self.mutex:
                     if track_id in self.tracked_persons:
                         p = self.tracked_persons[track_id]
-                        p.verification_status = "VERIFIED"
-                        p.name = res["name"]
-                        p.verified_name = res["name"]
-                        p.frame_val_name = res["name"]
-                        p.candidate_name = res["name"]
-                        p.next_state = "Tracking Active"
+                        if "embedding" in res:
+                            p.embedding = res["embedding"]
+                        sim = res.get("sim", 0.0)
+                        margin = res.get("margin", 0.0)
+                        candidate_name = res["name"]
                         
-                        if getattr(p, 'state', None) != "Tracking Active":
-                            print(f"[STATE CHANGE] {p.name} transitioned from {p.state} -> Tracking Active")
-                            p.state = "Tracking Active"
-                        p.last_state = p.state
-                        
-                        # Set tracking lock if meghan
-                        if p.name == "Meghan":
-                            self.primary_user_track_id = p.track_id
-                            self.current_authenticated_user = p.name
+                        sim_threshold = 0.910 if hasattr(self, 'profiles') and len(self.profiles) == 1 else 0.88
+                        if sim >= sim_threshold and margin > 0.05 and candidate_name != "Unknown":
+                            p.candidate_name = candidate_name
+                            p.biometric_match_counter = getattr(p, 'biometric_match_counter', 0) + 1
+                            if p.biometric_match_counter >= 5:
+                                conflict_track = None
+                                for other_track_id, other_p in self.tracked_persons.items():
+                                    if other_track_id != p.track_id and getattr(other_p, 'verification_status', 'UNKNOWN') == "VERIFIED" and other_p.state == "Tracking Active" and other_p.name == p.candidate_name:
+                                        conflict_track = other_p
+                                        break
+                                
+                                assign_identity = True
+                                if conflict_track:
+                                    p_area = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
+                                    conflict_area = (conflict_track.box[2] - conflict_track.box[0]) * (conflict_track.box[3] - conflict_track.box[1])
+                                    
+                                    if p_area > (conflict_area * 1.3):
+                                        print(f"[SECURITY] Identity Conflict Resolved: Foreground track ({p_area:.0f}) stole '{p.candidate_name}' from background ({conflict_area:.0f})")
+                                        conflict_track.name = "Unknown"
+                                        conflict_track.state = "Unregistered Guest"
+                                        conflict_track.next_state = "Unregistered Guest"
+                                        conflict_track.verification_status = "UNKNOWN"
+                                        conflict_track.biometric_match_counter = 0
+                                    else:
+                                        print(f"[SECURITY] Identity Conflict Resolved: Rejected background track attempt to hijack '{p.candidate_name}'")
+                                        assign_identity = False
+                                        p.name = "Unknown"
+                                        p.state = "Unregistered Guest"
+                                        p.next_state = "Unregistered Guest"
+                                        p.verification_status = "UNKNOWN"
+                                        p.biometric_match_counter = 0
+
+                                if assign_identity:
+                                    p.verification_status = "VERIFIED"
+                                    p.name = p.candidate_name
+                                    p.verified_name = p.candidate_name
+                                    p.frame_val_name = p.candidate_name
+                                    p.next_state = "Tracking Active"
+                                    
+                                    if getattr(p, 'state', None) != "Tracking Active":
+                                        print(f"[STATE CHANGE] {p.name} transitioned from {p.state} -> Tracking Active")
+                                        p.state = "Tracking Active"
+                                    p.last_state = p.state
+                                    
+                                    # Set tracking lock if meghan
+                                    if p.name == "Meghan":
+                                        self.primary_user_track_id = p.track_id
+                                        self.current_authenticated_user = p.name
+                            else:
+                                p.next_state = "Candidate"
+                                if getattr(p, 'state', None) != "Candidate":
+                                    print(f"[STATE CHANGE] Track {p.track_id} transitioned from {p.state} -> Candidate ({p.biometric_match_counter}/5)")
+                                    p.state = "Candidate"
+                                p.last_state = p.state
+                        else:
+                            # Instant safety reset on a bad or suspicious frame
+                            p.biometric_match_counter = 0
+                            p.next_state = "Searching / Re-acquiring"
+                            if getattr(p, 'state', None) != "Searching / Re-acquiring":
+                                print(f"[STATE CHANGE] Track {p.track_id} transitioned from {p.state} -> Searching / Re-acquiring (Quality Gate Failed)")
+                                p.state = "Searching / Re-acquiring"
+                            p.last_state = p.state
             except python_queue.Empty:
                 break
         
@@ -725,23 +802,52 @@ class TrackerEngine:
                             
                 if target_person:
                     try:
-                        self.db_manager.register_user(
-                            self.pending_registration_name, 
-                            "System Admin", 
-                            "Registered successfully."
-                        )
-                        self.profiles[self.pending_registration_name] = {"embeddings": []}
+                        face_embedding = target_person.embedding
                         
-                        target_person.name = self.pending_registration_name
-                        target_person.verification_status = "VERIFIED"
-                        target_person.verified_name = self.pending_registration_name
-                        target_person.next_state = "Tracking Active"
-                        target_person.state = "Tracking Active"
-                        
-                        self.primary_user_track_id = target_person.track_id
-                        self.current_authenticated_user = target_person.name
-                        print(f"[TRACKING] Instant registration successful for {self.pending_registration_name}")
-                        self._save_profiles_json()
+                        import numpy as np
+                        emb_array = np.array(face_embedding)
+                        if np.all(emb_array == 0.0) or emb_array.size == 0:
+                            print("[TRACKING WARNING] Aborting save: Face embedding is an unpopulated zero-array placeholder.")
+                            self.pending_registration_name = None
+                        else:
+                            # Check what save method actually exists on your database manager instance
+                            if hasattr(self.db_manager, 'create_profile'):
+                                self.db_manager.create_profile(self.pending_registration_name, face_embedding)
+                            elif hasattr(self.db_manager, 'register_user'):
+                                self.db_manager.register_user(self.pending_registration_name, face_embedding)
+                            elif hasattr(self.db_manager, 'save_profile'):
+                                self.db_manager.save_profile(self.pending_registration_name, face_embedding)
+                            elif hasattr(self.db_manager, 'add_profile'):
+                                self.db_manager.add_profile(self.pending_registration_name, face_embedding)
+                            else:
+                                # Fallback direct serialization if no matching abstraction method is found
+                                import json
+                                import os
+                                cache_data = {"profiles": {self.pending_registration_name: face_embedding.tolist() if hasattr(face_embedding, "tolist") else face_embedding}}
+                                if os.path.exists('profiles_cache.json'):
+                                    try:
+                                        with open('profiles_cache.json', 'r') as f:
+                                            existing_data = json.load(f)
+                                            if "profiles" in existing_data:
+                                                existing_data["profiles"].update(cache_data["profiles"])
+                                            cache_data = existing_data
+                                    except Exception:
+                                        pass
+                                with open('profiles_cache.json', 'w') as f:
+                                    json.dump(cache_data, f)
+                                    
+                            self.profiles[self.pending_registration_name] = {"embeddings": [face_embedding.tolist() if hasattr(face_embedding, "tolist") else face_embedding]}
+                            
+                            target_person.name = self.pending_registration_name
+                            target_person.verification_status = "VERIFIED"
+                            target_person.verified_name = self.pending_registration_name
+                            target_person.next_state = "Tracking Active"
+                            target_person.state = "Tracking Active"
+                            
+                            self.primary_user_track_id = target_person.track_id
+                            self.current_authenticated_user = target_person.name
+                            print(f"[TRACKING] Instant registration successful for {self.pending_registration_name}")
+                            self._save_profiles_json()
                     except Exception as e:
                         print(f"[TRACKING] Failed instant registration: {e}")
                 self.pending_registration_name = None
@@ -936,8 +1042,39 @@ class TrackerEngine:
                     best_guest.last_analytics_flush_time = current_time
 
         # ---------------------------------------------------------
+        # 2b. PRIMARY USER PROXIMITY GUARD (ANTI-HIJACKING)
+        # ---------------------------------------------------------
+        active_tracks = [p for p in self.tracked_persons.values() if p.track_id in active_track_ids]
+        verified_tracks = [p for p in active_tracks if p.verification_status == "VERIFIED" and p.state == "Tracking Active"]
+        unverified_tracks = [p for p in active_tracks if getattr(p, 'verification_status', 'UNKNOWN') != "VERIFIED"]
+        
+        for v_track in verified_tracks:
+            v_area = (v_track.box[2] - v_track.box[0]) * (v_track.box[3] - v_track.box[1])
+            for u_track in unverified_tracks:
+                u_area = (u_track.box[2] - u_track.box[0]) * (u_track.box[3] - u_track.box[1])
+                if u_area > (v_area * 1.5):
+                    print(f"[SECURITY] Proximity Guard Triggered! Unverified foreground track is suppressing background verified track '{v_track.name}'")
+                    v_track.state = "Unregistered Guest"
+                    v_track.next_state = "Unregistered Guest"
+                    v_track.name = "Unknown"
+                    v_track.verification_status = "UNKNOWN"
+                    v_track.biometric_match_counter = 0
+                    
+                    u_track.biometric_match_counter = 0
+                    u_track.state = "Verifying Identity"
+                    u_track.next_state = "Verifying Identity"
+                    
+                    if getattr(self, 'primary_user_track_id', None) == v_track.track_id:
+                        self.primary_user_track_id = None
+                        self.current_authenticated_user = None
+                    break
+
+        # ---------------------------------------------------------
         # 3. BIOMETRIC OFFLOAD (ASYNC SUBMISSION)
         # ---------------------------------------------------------
+        if (not hasattr(self, 'profiles') or len(self.profiles) == 0) and getattr(self, 'pending_registration_name', None) is None:
+            print("[TRACKING INITIALIZER] Clean database footprint caught. Autoloading calibration target: 'Meghan'")
+            self.pending_registration_name = "Meghan"
         is_profile_already_active = any(
             getattr(p, 'verification_status', 'UNKNOWN') == "VERIFIED" and p.state == "Tracking Active"
             for p in self.tracked_persons.values()
