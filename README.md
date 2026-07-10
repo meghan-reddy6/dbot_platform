@@ -1,62 +1,111 @@
-# DeskBot V3 - Smart Ergonomic Health Pipeline
+# DeskBot V3 - AI Posture & Ergonomic Health Monitor
 
-DeskBot V3 is an advanced, hardware-accelerated ergonomic monitoring system. It leverages a dynamic **Cross-Platform Multi-Model Cascading Pipeline** to track human posture, eye gaze, and workspace sessions in real time, automatically deploying local alerts for posture deficits.
+DeskBot V3 is an advanced, hardware-accelerated ergonomic monitoring system. It leverages a dynamic multi-model computer vision pipeline to track human posture, eye gaze, and workspace session lengths in real time, automatically deploying local audio alerts for posture deficits.
 
-## Multi-Model Pipeline Data Flow
+## Overview
+The primary goal of DeskBot V3 is to promote healthy ergonomic habits for desk workers without requiring wearable hardware. Using standard webcams and edge-AI accelerators, the system constructs a 3D skeletal map of the user, identifies them via facial biometrics, learns their natural sitting baseline, and issues audio corrections when it detects severe slouching, neck deviation, or excessive screen time.
 
-The system employs a strictly gated, two-stage cascading inference pipeline to drastically reduce unnecessary computational overhead and protect system responsiveness.
+## Features
+- **Real-Time Skeletal Posture Analysis:** Tracks 17-point keypoints using YOLOv8 to calculate spine alignment, shoulder roll, and torso depth.
+- **Biometric Identity Persistence:** Uses MobileFaceNet (ArcFace) embeddings to identify users and persist their session data even if they temporarily leave the frame.
+- **Dynamic 3D Head Pose Estimation:** Calculates pitch, yaw, and roll using Perspective-n-Point (PnP) geometry for neck strain and gaze tracking.
+- **Automatic Audio Alerts:** Queued, thread-safe text-to-speech (TTS) engine that issues corrective audio prompts (e.g., "Lift your head", "Avoid leaning forward").
+- **Live Web Dashboard:** Local Flask-based dashboard offering real-time telemetry, session metrics, and a live-annotated camera feed.
+- **Hardware Acceleration:** Native Windows DirectML and ONNX Runtime support for highly efficient local Edge AI inference.
 
-### Stage 1: Human Detection & Spatial Tracking (Always On)
-- **Model:** YOLOv8 Nano Pose (INT8)
-- **Frequency:** Frame-by-frame
-- **Function:** Extracts bounding boxes, 17-point skeletal keypoints, and spatial scale. Calculates real-time 3D head pose (pitch, yaw, roll) using Perspective-n-Point (PnP) geometry and extracts pupil vectors for gaze analysis. This stage provides 100% of the data required for persistent tracking (MOT) and health evaluations without invoking heavy ID models.
+## Tech Stack
+- **Language:** Python 3.12+
+- **Machine Learning / AI:** Ultralytics (YOLOv8-Pose), ONNX Runtime, PyTorch (DirectML)
+- **Computer Vision:** OpenCV (`opencv-python`)
+- **Web Framework:** Flask (Backend API & Frontend serving)
+- **Database:** SQLite3 (Local telemetry logging)
+- **Package Management:** `uv`
+- **Math/Geometry:** NumPy, SciPy
 
-### Stage 2: Biometric Embeddings Vectorizer (Gated / Idle)
-- **Model:** Simulated 128-dimensional Facial Vectorizer (FP16/INT8)
-- **Frequency:** Strictly Gated (Idle by default)
-- **Function:** Generates a unique facial signature for the user. It is **strictly forbidden** from running frame-by-frame. It is only permitted to execute when the system detects an unassigned anchor (`self.primary_user_track_id is None`) or when the user intentionally triggers a manual recalibration request.
+## Project Structure
+```text
+dbot/
+├── deskbot_v3.py           # Application Entry Point (Orchestrator & Flask App)
+├── core/
+│   ├── tracking/           # MOT, Session State (UserSession, Person), and Geometry
+│   └── model_manager.py    # Downloads and validates ONNX/YOLO models
+├── alerts/                 # Thread-safe TTS Audio Alert Manager
+├── analytics/              # SQLite Database and Dashboard Session Exporter
+├── config/                 # Pydantic Settings and Model Manifests
+├── detection/              # YOLO Person Detector and Face Detectors
+├── posture/                # Posture Evaluation algorithms & Correction Engine
+├── recognition/            # ArcFace Biometric Embeddings 
+├── static/                 # Web Dashboard CSS/JS assets
+├── templates/              # HTML Web Dashboard
+├── tests/                  # Unit tests and script sandboxes
+├── profiles_cache.json     # Saved biometric embeddings
+└── pyproject.toml          # Python dependencies
+```
 
----
+## Architecture
+DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastically reduce unnecessary computational overhead.
 
-## Cross-Platform Execution Matrix
+1. **Stage 1: Spatial Tracking (Always On)**
+   YOLOv8 extracts bounding boxes and keypoints frame-by-frame. It provides 100% of the data required for persistent tracking and posture evaluation.
+2. **Stage 2: Biometric Vectorizer (Idle by Default)**
+   The heavy MobileFaceNet identity model is strictly gated. It only executes when the tracker encounters a new, unregistered bounding box or during manual recalibration, locking the identity to a persistent `UserSession`.
+3. **Threading Model:**
+   The `TrackerEngine` runs the heavy ML inference loop on a dedicated daemon thread. The Flask server runs on the main thread to serve the dashboard. The `AlertManager` runs on a third isolated thread using a FIFO `Queue` to prevent blocking the ML loop during audio playback.
 
-The `CrossPlatformInferenceManager` dynamically interrogates the host operating system upon instantiation and maps model execution to the optimal hardware accelerator using native SDK fallbacks. If a local proprietary backend (e.g., QNN or CoreML) is missing, it gracefully intercepts the `ImportError` and falls back to a mocked state or CPU execution.
+## Prerequisites
+- Python 3.12 or higher.
+- `uv` (Fast Python package installer).
+- A connected USB Webcam or integrated laptop camera.
+- (Optional) Windows machine with DirectX 12 compatible GPU for DirectML acceleration.
 
-| Host Operating System | Architecture | Hardware Accelerator | Native Inference SDK | Provider / Target |
-| :--- | :--- | :--- | :--- | :--- |
-| **Linux (Qualcomm Rubik Pi)** | `aarch64` | Hexagon NPU | Qualcomm AI Engine Direct | `QNNExecutionProvider` (FP16 Burst) |
-| **Microsoft Windows** | `amd64` / `x86_64` | NVIDIA / AMD GPU | ONNX Runtime | `CUDAExecutionProvider` or `DmlExecutionProvider` |
-| **Apple macOS** | `arm64` | Apple Neural Engine (ANE) | CoreML / MPS | Native PyTorch MPS Hook |
-
----
-
-## Operational State Rules
-
-The tracker's state machine governs all posture and biometric logic to ensure a completely seamless and fail-safe user experience:
-
-1. **Single-Target Biometric Anchor Lock:**
-   Once a user satisfies the 15-frame biometric consensus threshold (cosine similarity > cutoff limit), they are "locked" as the primary anchor (`self.primary_user_track_id`).
-   
-2. **Absolute Bystander Blindness:**
-   All secondary skeletal detections in the frame are categorized as `Secondary Bystander` and are entirely ignored. Their posture is never evaluated, and the heavy Biometric ID model will never scan them as long as the primary anchor is locked.
-
-3. **Manual Recalibration Override:**
-   A manual recalibration event temporarily unlocks the biometric gate, flags `self.manual_recalibration_requested = True`, and bypasses historical spatial memory to force a fresh anchor lock and posture baseline.
-
-4. **15-Frame Consensus Gateway & Unregistered Short-Circuit:**
-   New users ("Unknown") are subjected to a 15-frame rolling biometric similarity consensus. If they fail to match an established profile, their state is locked to `Unregistered Guest` or `Secondary Bystander`. In these states, **all posture tracking, voice alerts, and gaze checks are permanently short-circuited**. The system will not process them until they are officially registered via the Dashboard API.
-
----
-
-## Getting Started
-
-1. **Install Requirements:**
+## Installation
+1. Clone the repository and navigate to the root directory.
+2. Install dependencies using `uv`:
    ```bash
-   pip install -r requirements.txt
+   uv venv
+   uv pip install -e .
    ```
-2. **Run Server:**
-   ```bash
-   python deskbot_v3.py
-   ```
-3. **Access Dashboard:**
-   Navigate to `http://localhost:5000` to view the live analytics layer and register a user profile.
+   *(Alternatively, run `uv run deskbot_v3.py` to auto-bootstrap).*
+
+## Environment Configuration
+The application relies heavily on defaults specified in `config/settings.py`. There are no hard `.env` requirements, but the following configurations are dynamically evaluated:
+- **Models:** Models are automatically downloaded by `core/model_manager.py` to the `models/` directory on first boot based on `models_manifest.json`.
+- **Database:** Creates `analytics/telemetry.db` automatically in the local path.
+- **Hardware:** Automatically attempts to hook `DmlExecutionProvider` (DirectML) for ONNX and PyTorch if available, gracefully falling back to CPU.
+
+## Running the Project
+To start the full pipeline (Inference Engine + Flask Server):
+```bash
+uv run deskbot_v3.py
+```
+Once initialized, the terminal will display: `Server pipeline active at: http://localhost:5000`. Navigate to this URL in your browser to view the live dashboard and register your biometric profile.
+
+## Testing
+Run unit tests for the posture analysis and correction engines using `unittest`:
+```bash
+python -m unittest discover tests
+```
+
+## API Documentation
+The local Flask server exposes several endpoints for dashboard interaction:
+- `GET /` - Renders the main dashboard.
+- `GET /api/metrics_slice` - Returns live telemetry JSON for all active tracking sessions.
+- `POST /api/profile/register` - Registers the currently tracked user to a named biometric profile.
+- `POST /api/profile/recalibrate` - Drops the current posture baseline and forces the active identity back into the Calibration state.
+- `POST /api/profile/delete` - Deletes a user's biometric profile and clears their telemetry history.
+
+## Database
+- **Technology:** SQLite3 (`sqlite3` native python module)
+- **Schema:** Contains `session_logs` and `posture_telemetry`.
+- **Setup:** Auto-migrates and instantiates upon first boot via `analytics/db.py`.
+
+## Troubleshooting
+- **No Targets in Frame:** Ensure your webcam is well-lit and not covered. Ensure you have registered your face in the dashboard.
+- **Alerts overlapping or not playing:** DeskBot uses PowerShell `System.Speech.Synthesis` under the hood. If alerts fail to play, ensure your Windows sound settings are active and the script isn't heavily CPU bottlenecked.
+- **Tracking swaps rapidly:** Ensure there are no background reflections or portraits behind you causing YOLO ghosting.
+
+## Contributing
+When contributing, ensure all heavy ML execution is restricted to the `TrackerEngine` thread. Do not introduce blocking calls to the main tracking loop.
+
+## License
+Proprietary / Thundersoft Internal.
