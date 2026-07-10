@@ -410,15 +410,8 @@ class TrackerEngine:
                 person.next_state = "Tracking Active"
 
                 if person.name in self.profiles:
-                    if "embeddings" not in self.profiles[person.name]:
-                        self.profiles[person.name]["embeddings"] = [
-                            self.profiles[person.name]["embedding"]
-                        ]
-                    self.profiles[person.name]["embeddings"].append(person.embedding)
-                    self._save_profiles_json()
-                    logger.info(
-                        f"[BIOMETRICS] Appended new accessory embedding to profile cluster for {person.name}"
-                    )
+                    # (Automatic embedding append disabled to prevent database corruption)
+                    pass
 
                 self.primary_user_track_id = person.track_id
                 self._dispatch_voice(
@@ -629,7 +622,7 @@ class TrackerEngine:
 
                         # (Anti-Drift Hooking has been removed to prevent blind session hijacking)
 
-                        # 3. REFACTOR THE EMBEDDING COMPARISON CORE
+                        # 3. REFACTOR THE EMBEDDING COMPARISON CORE (ArcFace & Margin Based)
                         candidate_name = "Unknown"
                         sim = 0.0
                         margin = 1.0
@@ -656,6 +649,12 @@ class TrackerEngine:
                                     continue
 
                                 templates = np.array(db_embs, dtype=np.float32)
+                                
+                                # Safety Check: Prevent crash if legacy LBP (128-d) is compared to ArcFace (512-d)
+                                if templates.shape[1] != norm_embedding.shape[0]:
+                                    logger.warning(f"[BIOMETRICS] Dimension mismatch for {name}. Profile has {templates.shape[1]}-d, live is {norm_embedding.shape[0]}-d. Skipping (please re-register).")
+                                    continue
+
                                 norm_templates = templates / (
                                     np.linalg.norm(templates, axis=1, keepdims=True)
                                     + 1e-6
@@ -677,12 +676,17 @@ class TrackerEngine:
                                 else 1.0
                             )
 
-                            if len(self.profiles) > 1 and margin < 0.06:
-                                candidate_name = "Unknown [Collision Risk Reject]"
-                            elif sim < settings.admission_threshold_strict:
+                            if len(self.profiles) > 1 and margin < getattr(settings, "ambiguity_margin", 0.15):
+                                candidate_name = "Unknown [Ambiguous Match]"
+                            elif sim < getattr(settings, "recognition_threshold_initial", 0.55):
                                 candidate_name = "Unknown [Low Confidence]"
                             else:
                                 candidate_name = matched_db_profile_string
+
+                            # Biometrics Telemetry Logging
+                            box_w = p.box[2] - p.box[0]
+                            box_h = p.box[3] - p.box[1]
+                            logger.info(f"[BIOMETRICS] Track={p.track_id} | Box={box_w:.1f}x{box_h:.1f} | Top={matched_db_profile_string} ({sim:.3f}) | Margin={margin:.3f} | Result={candidate_name}")
 
                         current_area = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
                         min_primary_area = (
@@ -694,6 +698,7 @@ class TrackerEngine:
                             not in [
                                 "Unknown",
                                 "Unknown [Collision Risk Reject]",
+                                "Unknown [Ambiguous Match]",
                                 "Unknown [Low Confidence]",
                                 "Unknown [Unregistered Guest]",
                             ]
@@ -705,23 +710,20 @@ class TrackerEngine:
                             p.biometric_match_counter = 0
                             continue
 
-                        if getattr(
-                            p, "verification_status", "UNKNOWN"
-                        ) == "VERIFIED" and p.track_id == getattr(
-                            self, "primary_user_track_id", None
-                        ):
-                            sim_threshold = settings.hysteresis_holding_threshold
-                        else:
-                            sim_threshold = settings.admission_threshold_strict
-
+                        # Track-ID Binding logic
+                        if getattr(p, "verification_status", "UNKNOWN") == "VERIFIED":
+                            # Trust the tracker: Once verified, preserve identity unless explicitly overwritten by high confidence imposter
+                            pass
+                        
                         is_valid_candidate = candidate_name not in [
                             "Unknown",
                             "Unknown [Collision Risk Reject]",
+                            "Unknown [Ambiguous Match]",
                             "Unknown [Low Confidence]",
                             "Unknown [Unregistered Guest]",
                         ]
 
-                        if is_valid_candidate and sim >= sim_threshold:
+                        if is_valid_candidate:
                             # Absolute Global Name Uniqueness
                             if (
                                 self.current_authenticated_user
@@ -739,7 +741,7 @@ class TrackerEngine:
                             p.biometric_match_counter = (
                                 getattr(p, "biometric_match_counter", 0) + 1
                             )
-                            if p.biometric_match_counter >= 5:
+                            if p.biometric_match_counter >= getattr(settings, "confirmation_frame_count", 5):
                                 p.verification_status = "VERIFIED"
 
                                 # STRICT SEAT COORDINATE ISOLATION
@@ -1026,22 +1028,8 @@ class TrackerEngine:
                             and hasattr(best_guest, "embedding")
                             and np.sum(best_guest.embedding) != 0
                         ):
-                            db_embs = profile["embeddings"]
-                            norm_live = best_guest.embedding / (
-                                np.linalg.norm(best_guest.embedding) + 1e-6
-                            )
-                            max_sim = 0.0
-                            for db_emb in db_embs:
-                                db_emb_np = np.array(db_emb, dtype=np.float32)
-                                norm_db = db_emb_np / (np.linalg.norm(db_emb_np) + 1e-6)
-                                sim = np.dot(norm_live, norm_db)
-                                if sim > max_sim:
-                                    max_sim = sim
-                            if 0.78 <= max_sim <= 0.93:
-                                profile["embeddings"].append(
-                                    best_guest.embedding.tolist()
-                                )
-                                self._save_profiles_json()
+                            # (Automatic continuous learning disabled to prevent drifting identities)
+                            pass
 
                     # Analytics Flush
                     if (

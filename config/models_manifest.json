@@ -1,0 +1,38 @@
+{
+  "yolo_pose": {
+    "filename": "yolov8n-pose.pt",
+    "version": "8.0",
+    "url": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-pose.pt",
+    "sha256": "",
+    "framework": "pytorch",
+    "required": true,
+    "description": "Ultralytics YOLOv8 Nano Pose model for posture tracking."
+  },
+  "arcface_embedder": {
+    "filename": "mobilefacenet.onnx",
+    "version": "1.0",
+    "url": "https://huggingface.co/spaces/hukenovs/face_recognition/resolve/main/models/mobilefacenet.onnx",
+    "sha256": "",
+    "framework": "onnx",
+    "required": true,
+    "description": "MobileFaceNet ArcFace embeddings for edge biometric verification."
+  },
+  "face_detector": {
+    "filename": "face_detector.onnx",
+    "version": "1.0",
+    "url": "",
+    "sha256": "",
+    "framework": "onnx",
+    "required": true,
+    "description": "Internal Face Detection ONNX model."
+  },
+  "face_landmark_detector": {
+    "filename": "face_landmark_detector.onnx",
+    "version": "1.0",
+    "url": "",
+    "sha256": "",
+    "framework": "onnx",
+    "required": true,
+    "description": "Internal 5-point Face Landmark ONNX model for alignment."
+  }
+}

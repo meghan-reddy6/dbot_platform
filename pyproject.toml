@@ -15,5 +15,5 @@ dependencies = [
     "torch-directml>=0.2.5.dev240914",
     "onnxruntime-directml>=1.24.4",
     "pypiwin32>=223",
-    "opencv-contrib-python>=5.0.0.93",
+    "opencv-python>=4.8.0",
 ]

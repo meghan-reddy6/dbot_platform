@@ -1,48 +1,133 @@
 import os
 import cv2
 import numpy as np
-import logging
-from typing import Optional
 import onnxruntime as ort
-from utils.hardware import HardwareDetector
+import logging
+from typing import Optional, Tuple, Dict, Any
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+class FaceAligner:
+    """
+    Handles face cropping, quality checks, and 112x112 ArcFace alignment.
+    """
+    
+    # Standard ArcFace reference points for 112x112
+    REFERENCE_FACIAL_POINTS = np.array([
+        [38.2946, 51.6963],
+        [73.5318, 51.6963],
+        [56.0252, 71.7366],
+        [41.5493, 92.3655],
+        [70.7299, 92.3655]
+    ], dtype=np.float32)
+
+    @staticmethod
+    def assess_quality(face_crop: np.ndarray, landmarks: np.ndarray) -> bool:
+        """
+        Deep quality heuristics to reject blurry, small, or extreme pose faces.
+        """
+        h, w = face_crop.shape[:2]
+        if w < settings.face_min_width or h < settings.face_min_width:
+            logger.debug(f"[QUALITY] Reject: Face too small ({w}x{h})")
+            return False
+            
+        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        if blur_score < settings.min_blur_laplacian:
+            logger.debug(f"[QUALITY] Reject: Face too blurry (Laplacian: {blur_score:.2f})")
+            return False
+            
+        return True
+
+    @staticmethod
+    def align_112x112(image: np.ndarray, landmarks: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Aligns the face based on 5 landmarks (left eye, right eye, nose, mouth left, mouth right)
+        to a 112x112 crop for ArcFace using similarity transform.
+        """
+        try:
+            tform, inliers = cv2.estimateAffinePartial2D(landmarks, FaceAligner.REFERENCE_FACIAL_POINTS)
+            if tform is None:
+                return None
+            aligned_face = cv2.warpAffine(image, tform, (112, 112), flags=cv2.INTER_CUBIC)
+            return aligned_face
+        except Exception as e:
+            logger.error(f"Alignment error: {e}")
+            return None
+
+
+class ArcFaceEmbedder:
+    """
+    Executes a MobileFaceNet or buffalo_l ArcFace ONNX model.
+    """
+    def __init__(self, model_path: str):
+        self.session = None
+        if model_path and os.path.exists(model_path):
+            try:
+                self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+                self.input_name = self.session.get_inputs()[0].name
+                logger.info(f"ArcFaceEmbedder initialized with {model_path}")
+            except Exception as e:
+                logger.error(f"Failed to load ArcFace model: {e}")
+        else:
+            logger.warning(f"ArcFace model not found at {model_path}. Recognition disabled.")
+
+    def forward(self, aligned_face: np.ndarray) -> Optional[np.ndarray]:
+        if not self.session:
+            return None
+        
+        try:
+            # ArcFace typically expects RGB image, normalized to [-1, 1]
+            img = cv2.cvtColor(aligned_face, cv2.COLOR_BGR2RGB)
+            img = (img.astype(np.float32) / 127.5) - 1.0
+            
+            # (112, 112, 3) -> (1, 3, 112, 112)
+            img = np.transpose(img, (2, 0, 1))
+            img = np.expand_dims(img, axis=0)
+            
+            embedding = self.session.run(None, {self.input_name: img})[0][0]
+            # L2 Normalize
+            embedding = embedding / (np.linalg.norm(embedding) + 1e-6)
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"Embedding generation error: {e}")
+            return None
 
 
 class FaceRecognizer:
     """
-    Executes Biometric Face Recognition.
-    Wraps the ONNX Face Detector, Landmark Aligner, and LBP Cascade
-    into a unified pipeline for the multiprocessing worker.
+    Decoupled recognition pipeline: Detector -> Aligner -> Embedder
     """
+    def __init__(self, model_dir: str = None):
+        from core.model_manager import ModelManager
+        
+        detector_path = ModelManager.get_model_path("face_detector")
+        landmark_path = ModelManager.get_model_path("face_landmark_detector")
+        arcface_path = ModelManager.get_model_path("arcface_embedder")
 
-    def __init__(self, model_dir: str = "D:\\Thundersoft\\dbot\\models"):
-        self.model_dir = model_dir
-        HardwareDetector.detect()
+        self.face_net = None
+        self.landmark_net = None
 
-        # In a real edge system, we would inject QNN or CoreML ExecutionProviders here.
-        # For compatibility with the old script, we fallback to CPU.
-        providers = ["CPUExecutionProvider"]
+        providers = ['CPUExecutionProvider']
 
-        model_path = os.path.join(model_dir, "face_detector.onnx")
-        landmark_path = os.path.join(model_dir, "face_landmark_detector.onnx")
-
-        try:
-            self.face_net = ort.InferenceSession(model_path, providers=providers)
+        if detector_path and os.path.exists(detector_path) and landmark_path and os.path.exists(landmark_path):
+            self.face_net = ort.InferenceSession(detector_path, providers=providers)
             self.landmark_net = ort.InferenceSession(landmark_path, providers=providers)
-            self.stage2_cascade = NativeFaceCascade(model_dir)
-            logger.info("FaceRecognizer backend initialized successfully.")
-        except Exception as e:
-            logger.error(f"FaceRecognizer ONNX load failed: {e}")
-            self.face_net = None
-            self.landmark_net = None
-            self.stage2_cascade = None
+        else:
+            logger.warning("Detector or Landmark models missing. Face Recognition degraded.")
+            
+        self.embedder = ArcFaceEmbedder(arcface_path)
 
     def extract_embedding(self, body_crop: np.ndarray) -> Optional[np.ndarray]:
         """
-        Takes a full body crop and returns a 128-dimensional embedding.
+        Executes the full pipeline:
+        1. Detector
+        2. Aligner (with Quality Gates)
+        3. ArcFace Embedder
         """
-        if body_crop.size == 0 or not self.face_net:
+        if body_crop.size == 0 or not self.face_net or not self.landmark_net:
             return None
 
         try:
@@ -103,7 +188,6 @@ class FaceRecognizer:
 
                 face_roi = body_crop[f_y1:f_y2, f_x1:f_x2]
 
-                det_info = {}
                 if face_roi.size > 0:
                     f_h, f_w = face_roi.shape[:2]
                     resized_roi = cv2.resize(face_roi, (192, 192))
@@ -117,129 +201,33 @@ class FaceRecognizer:
                     lmk_outs = self.landmark_net.run(None, {"image": roi_tensor})
                     lmk_names = [o.name for o in self.landmark_net.get_outputs()]
                     landmarks_q = lmk_outs[lmk_names.index("landmarks")]
-                    landmarks = (landmarks_q.astype(np.float32) - 50) * 0.004985
+                    landmarks_raw = (landmarks_q.astype(np.float32) - 50) * 0.004985
+                    
+                    # Extract 5 points for ArcFace alignment
+                    # landmarks_raw has shape [1, 468, 3] usually if mediapipe mesh
+                    r_eye = np.array([(landmarks_raw[0, 33, 0] + landmarks_raw[0, 133, 0]) / 2.0 * f_w + f_x1,
+                                      (landmarks_raw[0, 33, 1] + landmarks_raw[0, 133, 1]) / 2.0 * f_h + f_y1])
+                    l_eye = np.array([(landmarks_raw[0, 362, 0] + landmarks_raw[0, 263, 0]) / 2.0 * f_w + f_x1,
+                                      (landmarks_raw[0, 362, 1] + landmarks_raw[0, 263, 1]) / 2.0 * f_h + f_y1])
+                    nose = np.array([landmarks_raw[0, 1, 0] * f_w + f_x1, landmarks_raw[0, 1, 1] * f_h + f_y1])
+                    m_left = np.array([landmarks_raw[0, 61, 0] * f_w + f_x1, landmarks_raw[0, 61, 1] * f_h + f_y1])
+                    m_right = np.array([landmarks_raw[0, 291, 0] * f_w + f_x1, landmarks_raw[0, 291, 1] * f_h + f_y1])
+                    
+                    face_5_points = np.array([r_eye, l_eye, nose, m_left, m_right], dtype=np.float32)
+                    
+                    # 1. Quality Check
+                    if not FaceAligner.assess_quality(face_roi, face_5_points):
+                        return None
+                        
+                    # 2. Align 112x112
+                    aligned_face = FaceAligner.align_112x112(body_crop, face_5_points)
+                    if aligned_face is None:
+                        return None
+                        
+                    # 3. Generate Embedding
+                    return self.embedder.forward(aligned_face)
 
-                    r_eye_x = (
-                        landmarks[0, 33, 0] + landmarks[0, 133, 0]
-                    ) / 2.0 * f_w + f_x1
-                    r_eye_y = (
-                        landmarks[0, 33, 1] + landmarks[0, 133, 1]
-                    ) / 2.0 * f_h + f_y1
-                    l_eye_x = (
-                        landmarks[0, 362, 0] + landmarks[0, 263, 0]
-                    ) / 2.0 * f_w + f_x1
-                    l_eye_y = (
-                        landmarks[0, 362, 1] + landmarks[0, 263, 1]
-                    ) / 2.0 * f_h + f_y1
-
-                    dY = r_eye_y - l_eye_y
-                    dX = r_eye_x - l_eye_x
-                    angle = np.degrees(np.arctan2(dY, dX)) - 180
-
-                    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-                    aligned_crop = cv2.warpAffine(
-                        body_crop, M, (cw, ch), flags=cv2.INTER_CUBIC
-                    )
-
-                    size = int(max(fw, fh) * 1.2)
-                    half_size = size // 2
-
-                    crop_y1, crop_y2 = (
-                        max(0, int(cy - half_size)),
-                        min(ch, int(cy + half_size)),
-                    )
-                    crop_x1, crop_x2 = (
-                        max(0, int(cx - half_size)),
-                        min(cw, int(cx + half_size)),
-                    )
-
-                    if crop_y2 > crop_y1 and crop_x2 > crop_x1:
-                        det_info["roi_frame"] = aligned_crop[
-                            crop_y1:crop_y2, crop_x1:crop_x2
-                        ]
-
-                is_pre_aligned = "roi_frame" in det_info
-
-                final_crop = det_info.get("roi_frame", body_crop)
-                if self.stage2_cascade:
-                    return self.stage2_cascade.generate_signature(
-                        final_crop, is_pre_aligned
-                    )
-                else:
-                    return np.zeros(128, dtype=np.float32)
         except Exception as e:
-            logger.error(f"Error in extract_embedding: {e}")
+            logger.error(f"Error in extract_embedding pipeline: {e}")
 
         return None
-
-
-class NativeFaceCascade:
-    """
-    Independent Stage 2: Native Biometric Facial Execution Cascade
-    Executes OpenCV HAAR Face Detection -> LBP Texture Extraction
-    """
-
-    def __init__(self, model_dir: str):
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
-
-    def generate_signature(
-        self, face_crop: np.ndarray, pre_aligned: bool = False
-    ) -> np.ndarray:
-        """
-        Executes cascade and produces a 128-d LBP texture signature.
-        Divides the face into an 8x8 grid (64 cells). Each cell generates a 2-bin LBP histogram.
-        """
-        if face_crop is None or face_crop.size == 0:
-            return np.zeros(128, dtype=np.float32)
-
-        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-
-        if not pre_aligned:
-            # 1. Detection
-            faces = self.face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
-            )
-
-            if len(faces) == 0:
-                return np.zeros(128, dtype=np.float32)
-
-            x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
-            inner_face = gray[y : y + h, x : x + w]
-        else:
-            inner_face = gray
-
-        # 2. Extract LBP 128-d
-        inner_face = cv2.resize(inner_face, (64, 64))
-        lbp = np.zeros_like(inner_face)
-        for i in range(1, 63):
-            for j in range(1, 63):
-                center = inner_face[i, j]
-                code = 0
-                code |= (inner_face[i - 1, j - 1] > center) << 7
-                code |= (inner_face[i - 1, j] > center) << 6
-                code |= (inner_face[i - 1, j + 1] > center) << 5
-                code |= (inner_face[i, j + 1] > center) << 4
-                code |= (inner_face[i + 1, j + 1] > center) << 3
-                code |= (inner_face[i + 1, j] > center) << 2
-                code |= (inner_face[i + 1, j - 1] > center) << 1
-                code |= (inner_face[i, j - 1] > center) << 0
-                lbp[i, j] = code
-
-        features = []
-        cell_size = 8
-        for i in range(8):
-            for j in range(8):
-                cell = lbp[
-                    i * cell_size : (i + 1) * cell_size,
-                    j * cell_size : (j + 1) * cell_size,
-                ]
-                hist = cv2.calcHist([cell], [0], None, [2], [0, 256])
-                features.extend(hist.flatten())
-
-        embedding = np.array(features, dtype=np.float32)
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-
-        return embedding

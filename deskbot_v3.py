@@ -48,6 +48,8 @@ def master_inference_loop():
 
         with state_mutex:
             for tracked_person in health_evaluator.tracked_persons.values():
+                if tracked_person.state in ["Searching / Re-acquiring", "Absent"]:
+                    continue
                 x1, y1, x2, y2 = (
                     int(tracked_person.box[0]),
                     int(tracked_person.box[1]),
@@ -76,6 +78,12 @@ if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
+    
+    # ---------------------------------------------------------
+    # MODEL MANAGER BOOTSTRAP (Validates & downloads AI weights)
+    # ---------------------------------------------------------
+    from core.model_manager import ModelManager
+    ModelManager().bootstrap()
 
     db_conn = DatabaseManager()
     health_evaluator = TrackerEngine(db_conn)

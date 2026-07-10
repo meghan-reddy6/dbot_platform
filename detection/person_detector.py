@@ -16,23 +16,21 @@ class PersonDetector:
     but handles hardware acceleration fallbacks automatically.
     """
 
-    def __init__(self, model_dir: str = "D:\\Thundersoft\\dbot\\models"):
+    def __init__(self, model_dir: str = None):
         hardware = HardwareDetector.detect()
 
         try:
             from ultralytics import YOLO
+            from core.model_manager import ModelManager
 
-            if hardware.platform_system == "Windows":
-                yolo_path = os.path.join(model_dir, "yolov8n-pose.pt")
-                if not os.path.exists(yolo_path):
-                    yolo_path = os.path.join(model_dir, "yolov8n-pose.onnx")
+            yolo_path = ModelManager.get_model_path("yolo_pose")
+            
+            if yolo_path:
+                self.stage1_model = YOLO(yolo_path, task="pose")
+                logger.info(f"PersonDetector Initialized: {yolo_path}")
             else:
-                yolo_path = os.path.join(model_dir, "yolov8n-pose.onnx")
-                if not os.path.exists(yolo_path):
-                    yolo_path = os.path.join(model_dir, "yolov8n-pose.pt")
-
-            self.stage1_model = YOLO(yolo_path, task="pose")
-            logger.info(f"PersonDetector Initialized: {yolo_path}")
+                self.stage1_model = None
+                logger.warning("YOLO Pose model missing. Detection disabled.")
         except Exception as e:
             logger.error(f"PersonDetector YOLO initialization failed: {e}")
             self.stage1_model = None
