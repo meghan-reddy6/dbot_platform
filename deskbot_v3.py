@@ -2,18 +2,17 @@ import time
 import cv2
 import logging
 import threading
-from flask import Flask
-
-# SURGICAL LOG SILENCER: Disables high-frequency HTTP request polling print streams completely
-logging.getLogger("werkzeug").setLevel(logging.ERROR)
 import flask.cli
-
-flask.cli.show_server_banner = lambda *args: None
+from flask import Flask
 
 from database.crud import DatabaseManager
 from core.tracking import TrackerEngine, state_mutex
 from camera.camera_manager import CameraManager
+from api.routes import api_bp
 
+# SURGICAL LOG SILENCER: Disables high-frequency HTTP request polling print streams completely
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+flask.cli.show_server_banner = lambda *args: None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DeskBotV3.MainOrchestrator")
 
@@ -23,9 +22,6 @@ health_evaluator = None
 camera_bridge = None
 
 latest_frame_buffer = None
-
-from api.routes import api_bp
-
 app.register_blueprint(api_bp)
 
 

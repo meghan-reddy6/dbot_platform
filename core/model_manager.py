@@ -112,8 +112,22 @@ class ModelManager:
             try:
                 open(lock_path, 'a').close()  # Touch lock file
                 
-                # Download with chunking
-                urllib.request.urlretrieve(url, target_path)
+                # Download with chunking or zip extraction
+                zip_target = meta.get("zip_target")
+                
+                if url.endswith(".zip") and zip_target:
+                    import tempfile
+                    import zipfile
+                    logger.info(f"[MODEL] Downloading zip archive for {filename}...")
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                        urllib.request.urlretrieve(url, tmp.name)
+                        logger.info(f"[MODEL] Extracting {zip_target} from archive...")
+                        with zipfile.ZipFile(tmp.name, 'r') as z:
+                            with z.open(zip_target) as source, open(target_path, "wb") as target:
+                                target.write(source.read())
+                    os.remove(tmp.name)
+                else:
+                    urllib.request.urlretrieve(url, target_path)
                 
                 logger.info(f"[MODEL] Download complete: {filename}.")
                 if expected_sha256 and not self._validate_checksum(target_path, expected_sha256):

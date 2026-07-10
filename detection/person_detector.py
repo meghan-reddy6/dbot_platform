@@ -1,9 +1,7 @@
-import os
 import numpy as np
 import logging
 from typing import List, Dict, Any, Tuple
 from core.tracking.geometry import Keypoint
-from utils.hardware import HardwareDetector
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +15,6 @@ class PersonDetector:
     """
 
     def __init__(self, model_dir: str = None):
-        hardware = HardwareDetector.detect()
 
         try:
             from ultralytics import YOLO

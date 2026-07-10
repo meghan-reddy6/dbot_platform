@@ -5,14 +5,14 @@ class CorrectionEngine:
     """
 
     @staticmethod
-    def get_advice(person) -> str:
+    def get_advice(person, session) -> str:
         """
         Calculates severity and assigns the proper alert string.
         """
         from config.settings import settings
 
         torso_ratio = getattr(person, "smoothed_ratio", 0.5)
-        baseline_ratio = getattr(person, "posture_baseline", 0.5)
+        baseline_ratio = getattr(session, "posture_baseline", 0.5)
         spine_alignment = getattr(person, "spine_alignment", 0.0)
         shoulder_alignment = getattr(person, "shoulder_alignment", 0.0)
 
@@ -25,7 +25,7 @@ class CorrectionEngine:
             return "Straighten your back."
 
         # 3. Severe Neck Pitch
-        cal_pitch = getattr(person, "calibrated_baseline_neck_pitch", 0.0)
+        cal_pitch = getattr(session, "calibrated_baseline_neck_pitch", 0.0)
         relative_slouch = getattr(person, "pitch", 0.0) - cal_pitch
         if relative_slouch > settings.neck_pitch_tolerance_degrees:
             return "Lift your head."

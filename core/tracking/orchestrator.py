@@ -6,7 +6,7 @@ from config.settings import settings
 import multiprocessing
 from typing import Any, Optional, Tuple
 from detection.person_detector import PersonDetector
-from .state import Person
+from .state import Person, UserSession
 from alerts.alert_manager import AlertManager
 from posture.posture_analyzer import PostureAnalyzer
 from posture.correction_engine import CorrectionEngine
@@ -146,6 +146,9 @@ class TrackerEngine:
         self.last_session_owner = None
         self.current_authenticated_user = None
         self.anchor_lost_frame_counter = 0
+
+        # Persistent Identity Layer
+        self.active_sessions = {}
         self.last_voice_alert = 0.0
 
     def initialize_registration_session(self, user_name):
@@ -288,11 +291,11 @@ class TrackerEngine:
         return validated_profile_name, highest_consensus
 
     def _dispatch_voice(
-        self, text: str, category: str = "general", cooldown: float = 10.0
+        self, text: str, category: str = "general", cooldown: float = 10.0, identity: str = "Unknown"
     ) -> None:
         """Dispatches an asynchronous voice alert through the dedicated daemon queue."""
         if hasattr(self, "alert_manager"):
-            self.alert_manager.dispatch(text, category, cooldown)
+            self.alert_manager.dispatch(text, category, cooldown, identity)
 
     def _evaluate_single_target_health(
         self,
@@ -404,6 +407,16 @@ class TrackerEngine:
                         f"[CALIBRATION] Timeout fallback triggered. Preserving/Forcing track active for {person.name}."
                     )
 
+                # Save to UserSession
+                if person.name not in self.active_sessions:
+                    self.active_sessions[person.name] = UserSession(person.name)
+                session = self.active_sessions[person.name]
+                session.posture_baseline = person.posture_baseline
+                session.calibrated_baseline_neck_pitch = person.calibrated_baseline_neck_pitch
+                session.baseline_shoulder_y = person.baseline_shoulder_y
+                session.is_posture_calibrated = True
+                session.last_seen = current_time
+
                 person.calibration_accumulator = []
                 person.calibration_pitch_acc = []
                 person.calibration_y_acc = []
@@ -418,13 +431,18 @@ class TrackerEngine:
                     f"Calibration successful for {person.name}. Posture monitoring is now active.",
                     "calibration_success",
                     30.0,
+                    identity=person.name
                 )
 
             # SECURE THE CALIBRATION HOLD PARAMETERS: Completely block downstream state evaluation
             return
 
-        if not hasattr(person, "health_status"):
-            person.health_status = "Healthy"
+        session = self.active_sessions.get(person.name)
+        if not session:
+            # Fallback to local if no session (shouldn't happen for verified)
+            session = person
+        else:
+            session.last_seen = current_time
 
         if person.state in [
             "Tracking Active",
@@ -433,15 +451,15 @@ class TrackerEngine:
             "Searching / Re-acquiring",
         ]:
             if not person.is_looking_away:
-                person.screen_gaze_accumulation_timer += dt
-                if person.health_status != "Ocular Break Recommended":
-                    person.ocular_break_timer = 0.0
+                session.screen_gaze_accumulation_timer += dt
+                if session.health_status != "Ocular Break Recommended":
+                    session.ocular_break_timer = 0.0
 
             shoulder_center_y = (
                 pose["left_shoulder"].y + pose["right_shoulder"].y
             ) / 2.0
 
-            posture_state = PostureAnalyzer.evaluate(person, pose, frame_shape)
+            posture_state = PostureAnalyzer.evaluate(person, session, pose, frame_shape)
             is_slouching = posture_state.is_slouching
             is_standing = posture_state.is_standing
 
@@ -452,112 +470,126 @@ class TrackerEngine:
             is_pinned_to_ceiling = person.box[1] <= frame_shape[0] * 0.05
             nose_missing = pose["nose"].y <= 0.01
 
-            if not hasattr(person, "standing_accumulator_time"):
-                person.standing_accumulator_time = 0.0
-            if not hasattr(person, "slouch_accumulator_time"):
-                person.slouch_accumulator_time = 0.0
-            if not hasattr(person, "active_accumulator_time"):
-                person.active_accumulator_time = 0.0
-
             is_standing_frame = is_standing or (is_pinned_to_ceiling and nose_missing)
             is_slouching_frame = is_slouching and not is_standing_frame
 
             if is_standing_frame:
-                person.standing_accumulator_time += dt
-                person.slouch_accumulator_time = 0.0
-                person.active_accumulator_time = 0.0
+                session.standing_accumulator_time += dt
+                session.slouch_accumulator_time = 0.0
+                session.active_accumulator_time = 0.0
             elif is_slouching_frame:
-                person.slouch_accumulator_time += dt
-                person.standing_accumulator_time = 0.0
-                person.active_accumulator_time = 0.0
+                session.slouch_accumulator_time += dt
+                session.standing_accumulator_time = 0.0
+                session.active_accumulator_time = 0.0
             else:
-                person.active_accumulator_time += dt
-                person.standing_accumulator_time = 0.0
-                person.slouch_accumulator_time = 0.0
+                session.active_accumulator_time += dt
+                session.standing_accumulator_time = 0.0
+                session.slouch_accumulator_time = 0.0
 
-            if person.standing_accumulator_time >= 2.5:
-                pass  # Wait, standing might still affect p.state depending on the rest of the code, but we'll leave it as a pass for health_status. Wait, no, Standing is a p.state!
+            if session.standing_accumulator_time >= 2.5:
                 person.next_state = "Standing"
-            elif person.slouch_accumulator_time >= 4.0:
-                person.health_status = "Posture Deficit Alert"
-            elif person.active_accumulator_time >= 1.5:
+            elif session.slouch_accumulator_time >= 4.0:
+                session.health_status = "Posture Deficit Alert"
+            elif session.active_accumulator_time >= 1.5:
                 if person.state == "Standing":
                     person.next_state = "Tracking Active"
-                if person.health_status == "Posture Deficit Alert":
-                    person.health_status = "Healthy"
+                if session.health_status == "Posture Deficit Alert":
+                    session.health_status = "Healthy"
 
-            if person.screen_gaze_accumulation_timer >= person.screen_gaze_limit:
-                person.health_status = "Ocular Break Recommended"
-                if not getattr(person, "ocular_break_announced", False):
+            if session.screen_gaze_accumulation_timer >= getattr(person, "screen_gaze_limit", 1200):
+                session.health_status = "Ocular Break Recommended"
+                if not session.ocular_break_announced:
                     logger.info(
-                        "[TIMER ALERT] Triggering Voice Alert for: Ocular Break Recommended"
+                        f"[TIMER ALERT] Triggering Voice Alert for: Ocular Break Recommended ({person.name})"
                     )
                     self._dispatch_voice(
-                        f"{person.name}, attention, eye strain warning. Please look away from the screen."
+                        f"{person.name}, attention, eye strain warning. Please look away from the screen.",
+                        identity=person.name
                     )
-                    person.ocular_break_announced = True
+                    session.ocular_break_announced = True
 
                 if person.is_looking_away:
-                    person.ocular_break_timer += dt
-                    if person.ocular_break_timer >= person.gaze_away_limit:
-                        person.screen_gaze_accumulation_timer = 0.0
-                        person.ocular_break_timer = 0.0
-                        person.health_status = "Healthy"
-                        person.ocular_break_announced = False
+                    session.ocular_break_timer += dt
+                    if session.ocular_break_timer >= getattr(person, "gaze_away_limit", 20):
+                        session.screen_gaze_accumulation_timer = 0.0
+                        session.ocular_break_timer = 0.0
+                        session.health_status = "Healthy"
+                        session.ocular_break_announced = False
 
             if person.state == "Tracking Active":
-                person.sitting_duration_clock += dt
-                if person.sitting_duration_clock >= person.session_limit:
-                    person.health_status = "Session Limit Reached - Stand Up!"
-                    if not getattr(person, "session_limit_announced", False):
+                session.sitting_duration_clock += dt
+                if session.sitting_duration_clock >= getattr(person, "session_limit", 2400):
+                    session.health_status = "Session Limit Reached - Stand Up!"
+                    if not session.session_limit_announced:
                         logger.info(
-                            "[TIMER ALERT] Triggering Voice Alert for: Session Limit Reached"
+                            f"[TIMER ALERT] Triggering Voice Alert for: Session Limit Reached ({person.name})"
                         )
                         self._dispatch_voice(
-                            f"{person.name}, you have been sitting for too long. Please stand up."
+                            f"{person.name}, you have been sitting for too long. Please stand up.",
+                            identity=person.name
                         )
-                        person.session_limit_announced = True
+                        session.session_limit_announced = True
 
-            if person.health_status == "Posture Deficit Alert":
-                if not getattr(person, "slouch_announced", False):
-                    advice = CorrectionEngine.get_advice(person)
+            if session.health_status == "Posture Deficit Alert":
+                if not session.slouch_announced:
+                    advice = CorrectionEngine.get_advice(person, session)
                     logger.info(
-                        f"[TIMER ALERT] Triggering Voice Alert for: Posture Deficit Alert - {advice}"
+                        f"[TIMER ALERT] Triggering Voice Alert for: Posture Deficit Alert - {advice} ({person.name})"
                     )
                     self._dispatch_voice(
                         f"{advice} {person.name}.",
                         category="posture_alert",
                         cooldown=30.0,
+                        identity=person.name
                     )
-                    person.slouch_announced = True
+                    session.slouch_announced = True
             else:
-                person.slouch_timer = max(
-                    0.0, getattr(person, "slouch_timer", 0.0) - dt
+                session.slouch_timer = max(
+                    0.0, getattr(session, "slouch_timer", 0.0) - dt
                 )
-                person.slouch_announced = False
+                session.slouch_announced = False
 
             if person.state == "Standing":
-                person.standing_duration_clock += dt
-                person.slouch_timer = max(0.0, person.slouch_timer - dt)
-                if person.standing_duration_clock >= person.stand_requirement:
-                    person.sitting_duration_clock = 0.0
-                    person.session_limit_announced = False
-                if is_standing:
-                    person.baseline_shoulder_y = (person.baseline_shoulder_y * 0.95) + (
+                session.standing_duration_clock += dt
+                session.slouch_timer = max(0.0, getattr(session, "slouch_timer", 0.0) - dt)
+                if session.standing_duration_clock >= getattr(person, "stand_requirement", 120):
+                    session.sitting_duration_clock = 0.0
+                    session.session_limit_announced = False
+                if is_standing and hasattr(session, "baseline_shoulder_y") and session.baseline_shoulder_y is not None:
+                    session.baseline_shoulder_y = (session.baseline_shoulder_y * 0.95) + (
                         shoulder_center_y * 0.05
                     )
 
             if person.state == "Tracking Active":
                 fast_frames = getattr(person, "fast_relatch_frames", 0)
                 alpha = 0.20 if fast_frames > 0 else 0.005
-                person.baseline_shoulder_y = (
-                    person.baseline_shoulder_y * (1.0 - alpha)
-                ) + (shoulder_center_y * alpha)
-                person.posture_baseline = (person.posture_baseline * (1.0 - alpha)) + (
-                    current_ratio * alpha
-                )
+                if hasattr(session, "baseline_shoulder_y") and session.baseline_shoulder_y is not None:
+                    session.baseline_shoulder_y = (
+                        session.baseline_shoulder_y * (1.0 - alpha)
+                    ) + (shoulder_center_y * alpha)
+                if hasattr(session, "posture_baseline") and session.posture_baseline is not None:
+                    session.posture_baseline = (session.posture_baseline * (1.0 - alpha)) + (
+                        current_ratio * alpha
+                    )
                 if fast_frames > 0:
                     person.fast_relatch_frames = fast_frames - 1
+            
+            
+            # Sync back to person for drawing loop to read
+            person.health_status = session.health_status
+
+            # Telemetry Logging
+            if current_time - getattr(session, "last_debug_log_time", 0) > 5.0:
+                logger.debug(
+                    f"\n[POSTURE DEBUG]\n"
+                    f"Identity: {session.identity_name}\n"
+                    f"Track: {person.track_id}\n"
+                    f"Session Age: {int(current_time - session.first_seen_time)}s\n"
+                    f"Sitting Duration: {int(session.sitting_duration_clock)}s\n"
+                    f"Current Posture: {'Standing' if session.standing_accumulator_time > 0 else 'Slouching' if session.slouch_accumulator_time > 0 else 'Active'}\n"
+                    f"Slouch Duration: {int(session.slouch_accumulator_time)}s\n"
+                )
+                session.last_debug_log_time = current_time
 
     def _calculate_iou(self, boxA: list, boxB: list) -> float:
         """Calculates Intersection over Union for bounding box suppression."""
@@ -586,6 +618,8 @@ class TrackerEngine:
         best_guest = None
         current_time = time.time()
 
+
+
         # ---------------------------------------------------------
         # 1. STATE INGESTION (QUEUE DRAIN)
         # ---------------------------------------------------------
@@ -598,6 +632,8 @@ class TrackerEngine:
                         p = self.tracked_persons[track_id]
                         if "embedding" in res:
                             p.embedding = res["embedding"]
+                            if hasattr(p, "last_20_embeddings"):
+                                p.last_20_embeddings.append(res["embedding"])
 
                         # 1. COMPUTE FRAME CENTER-MASS & SPATIAL ANCHOR GATING
                         frame_width = frame_shape[1]
@@ -636,8 +672,9 @@ class TrackerEngine:
                             second_highest_consensus = -1.0
                             matched_db_profile_string = "Unknown"
 
-                            norm_embedding = p.embedding / (
-                                np.linalg.norm(p.embedding) + 1e-6
+                            smoothed = np.mean(p.last_20_embeddings, axis=0) if hasattr(p, "last_20_embeddings") and p.last_20_embeddings else p.embedding
+                            norm_embedding = smoothed / (
+                                np.linalg.norm(smoothed) + 1e-6
                             )
 
                             for name, profile in self.profiles.items():
@@ -724,18 +761,7 @@ class TrackerEngine:
                         ]
 
                         if is_valid_candidate:
-                            # Absolute Global Name Uniqueness
-                            if (
-                                self.current_authenticated_user
-                                and candidate_name == self.current_authenticated_user
-                                and getattr(self, "primary_user_track_id", None) is not None
-                                and p.track_id != self.primary_user_track_id
-                            ):
-                                p.name = "Unknown [Unregistered Guest]"
-                                p.state = "Unregistered Guest"
-                                p.verification_status = "UNKNOWN"
-                                p.biometric_match_counter = 0
-                                continue
+
 
                             p.candidate_name = candidate_name
                             p.biometric_match_counter = (
@@ -744,20 +770,64 @@ class TrackerEngine:
                             if p.biometric_match_counter >= getattr(settings, "confirmation_frame_count", 5):
                                 p.verification_status = "VERIFIED"
 
+                                # Session Retrieval
+                                if p.candidate_name not in self.active_sessions:
+                                    logger.info(f"[TRACK DEBUG] Creating new UserSession for {p.candidate_name}")
+                                    self.active_sessions[p.candidate_name] = UserSession(p.candidate_name)
+                                else:
+                                    logger.info(f"[TRACK DEBUG] Reusing existing UserSession for {p.candidate_name}")
+                                
+                                session = self.active_sessions[p.candidate_name]
+                                session.last_seen = current_time
+
                                 # STRICT SEAT COORDINATE ISOLATION
-                                if (
-                                    p.candidate_name == getattr(self, "current_authenticated_user", None)
-                                    and getattr(self, "primary_user_track_id", None) is not None
-                                    and p.track_id != self.primary_user_track_id
-                                ):
+                                existing_active_tracks = [
+                                    t for t in self.tracked_persons.values()
+                                    if t.name == p.candidate_name and t.track_id != p.track_id and t.state not in ["Searching / Re-acquiring", "Absent"]
+                                ]
+                                
+                                if existing_active_tracks:
+                                    # Identity collision - someone is already actively tracked as this user!
                                     p.name = "Unknown [Unregistered Guest]"
                                     p.verification_status = "UNKNOWN"
                                     p.next_state = "Unregistered Guest"
-                                else:
-                                    p.name = p.candidate_name
-                                    p.verified_name = p.candidate_name
-                                    p.frame_val_name = p.candidate_name
+                                    continue
+                                
+                                # This is the valid track for this identity. Reassociate it if it was the primary user.
+                                old_primary_id = getattr(self, "primary_user_track_id", None)
+                                if old_primary_id is not None and old_primary_id != p.track_id:
+                                    old_track = self.tracked_persons.get(old_primary_id)
+                                    if old_track and old_track.name == p.candidate_name:
+                                        logger.info(
+                                            f"\n[SESSION MIGRATION]\n"
+                                            f"Identity: {p.candidate_name}\n"
+                                            f"Action: Transferring primary seat to new track ID {p.track_id}\n"
+                                            f"Monitoring: CONTINUED\n"
+                                        )
+                                        old_track.last_seen = 0  # Force garbage collection
+                                        self.primary_user_track_id = p.track_id
+                                    elif not old_track:
+                                        # Primary track was garbage collected, but this person matched the primary session
+                                        if session and session.identity_name == p.candidate_name:
+                                            self.primary_user_track_id = p.track_id
+                                elif old_primary_id is None:
+                                    self.primary_user_track_id = p.track_id
+                                
+                                p.name = p.candidate_name
+                                p.verified_name = p.candidate_name
+                                p.frame_val_name = p.candidate_name
+                                
+                                # Load calibration from session
+                                if session.is_posture_calibrated:
+                                    logger.info(f"[CALIBRATION DECISION] IDENTITY_ALREADY_CALIBRATED. Bypassing recalibration.")
+                                    p.posture_baseline = session.posture_baseline
+                                    p.calibrated_baseline_neck_pitch = session.calibrated_baseline_neck_pitch
+                                    p.baseline_shoulder_y = session.baseline_shoulder_y
+                                    p.is_posture_calibrated = True
                                     p.next_state = "Tracking Active"
+                                else:
+                                    logger.info(f"[CALIBRATION DECISION] NEW_PERSON or session uncalibrated.")
+                                    p.next_state = "Calibrating"
 
                         elif "Unknown" in candidate_name:
                             if (
@@ -840,7 +910,7 @@ class TrackerEngine:
                                         p.name = new_name
                                         p.verified_name = new_name
                                         p.frame_val_name = new_name
-                                        p.next_state = "Tracking Active"
+                                        p.next_state = "Calibrating"
                                     else:
                                         p.next_state = "Candidate"
                             else:
@@ -866,8 +936,19 @@ class TrackerEngine:
             if getattr(self, "trigger_recalibration", False) or getattr(
                 self, "manual_recalibration_requested", False
             ):
+                self.trigger_recalibration = False
+                self.manual_recalibration_requested = False
+
                 if self.primary_user_track_id in self.tracked_persons:
                     person = self.tracked_persons[self.primary_user_track_id]
+                    
+                    logger.info(
+                        f"\n[MANUAL RECALIBRATION]\n"
+                        f"Identity: {person.name}\n"
+                        f"Action: RESETTING BASELINE\n"
+                        f"Result: CALIBRATION STARTED\n"
+                    )
+                    
                     person.calibration_start_time = time.time()
                     person.calibration_accumulator = []
                     person.calibration_pitch_acc = []
@@ -876,8 +957,16 @@ class TrackerEngine:
                     person.state = "Calibrating"
                     person.is_posture_calibrated = False
                     person.calibration_announced = False
-                self.trigger_recalibration = False
-                self.manual_recalibration_requested = False
+                    
+                    # Wipe the persistent UserSession baseline
+                    session = self.active_sessions.get(person.name)
+                    if session:
+                        session.is_posture_calibrated = False
+                        if hasattr(session, 'posture_baseline'):
+                            del session.posture_baseline
+                        session.calibrated_baseline_neck_pitch = 0.0
+                        if hasattr(session, 'baseline_shoulder_y'):
+                            del session.baseline_shoulder_y
 
         # ---------------------------------------------------------
         # 2. DETECTION & SPATIAL ASSIGNMENT (FAST PATH)
@@ -1037,16 +1126,21 @@ class TrackerEngine:
                         - getattr(best_guest, "last_analytics_flush_time", 0.0)
                         >= 10.0
                     ):
+                        session = self.active_sessions.get(best_guest.name)
+                        sitting_clock = session.sitting_duration_clock if session else 0.0
+                        gaze_timer = session.screen_gaze_accumulation_timer if session else 0.0
+                        ocular_break = session.ocular_break_timer if session else 0.0
+
                         self.db_manager.log_analytics_flush(
                             user_name=best_guest.name,
                             session_state=best_guest.state,
                             duration_seconds=10.0,
-                            continuous_sitting_seconds=best_guest.sitting_duration_clock,
-                            continuous_gaze_seconds=best_guest.screen_gaze_accumulation_timer,
+                            continuous_sitting_seconds=sitting_clock,
+                            continuous_gaze_seconds=gaze_timer,
                             average_head_pitch=getattr(
                                 best_guest, "smoothed_pitch", best_guest.pitch
                             ),
-                            ocular_break_accumulator=best_guest.ocular_break_timer,
+                            ocular_break_accumulator=ocular_break,
                             spine_alignment=getattr(best_guest, "spine_alignment", 0.0),
                             shoulder_alignment=getattr(
                                 best_guest, "shoulder_alignment", 0.0
@@ -1137,8 +1231,10 @@ class TrackerEngine:
                         "Unknown (Ready for Registration)",
                         "Unknown",
                     ]:
+                        session = self.active_sessions.get(person.name)
+                        sitting_clock = session.sitting_duration_clock if session else 0.0
                         self.db_manager.log_session_metrics(
-                            person.name, "session_ended", person.sitting_duration_clock
+                            person.name, "session_ended", sitting_clock
                         )
                     keys_to_delete.append(track_id)
                 elif time_since_seen > 2.0:
@@ -1187,6 +1283,14 @@ class TrackerEngine:
         for k in keys_to_delete:
             del self.tracked_persons[k]
 
+        # Garbage collect UserSessions
+        sessions_to_delete = []
+        for name, session in self.active_sessions.items():
+            if current_time - session.last_seen > 300.0:
+                sessions_to_delete.append(name)
+        for name in sessions_to_delete:
+            del self.active_sessions[name]
+
         # ---------------------------------------------------------
         # 5. DYNAMIC AUTHENTICATED USER SELECTION
         # ---------------------------------------------------------
@@ -1197,7 +1301,7 @@ class TrackerEngine:
         closest_dist = float("inf")
 
         for p in self.tracked_persons.values():
-            if p.state == "Tracking Active" and p.verification_status == "VERIFIED":
+            if p.state in ["Tracking Active", "Calibrating"] and p.verification_status == "VERIFIED":
                 track_cx = (p.box[0] + p.box[2]) / 2.0
                 dist = abs(track_cx - frame_cx)
 

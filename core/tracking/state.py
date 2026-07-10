@@ -5,6 +5,45 @@ from collections import deque
 
 state_mutex = threading.Lock()
 
+class UserSession:
+    """
+    Persistent identity layer that survives temporary track losses.
+    """
+    def __init__(self, identity_name: str):
+        self.identity_name = identity_name
+        self.posture_baseline = None
+        self.calibrated_baseline_neck_pitch = None
+        self.baseline_shoulder_y = None
+        self.last_20_embeddings = deque(maxlen=20)
+        self.last_seen = time.time()
+        self.is_posture_calibrated = False
+
+        # Persistent Temporal State
+        self.first_seen_time = time.time()
+        self.sitting_duration_clock = 0.0
+        self.standing_duration_clock = 0.0
+        self.slouch_timer = 0.0
+        self.screen_gaze_accumulation_timer = 0.0
+        self.ocular_break_timer = 0.0
+        
+        # Accumulators for Health Evaluation
+        self.standing_accumulator_time = 0.0
+        self.slouch_accumulator_time = 0.0
+        self.active_accumulator_time = 0.0
+        
+        # Status & Flags
+        self.health_status = "Healthy"
+        self.ocular_break_announced = False
+        self.session_limit_announced = False
+        self.slouch_announced = False
+
+    def get_smoothed_embedding(self) -> np.ndarray:
+        if not self.last_20_embeddings:
+            return None
+        # Mean pooling over recent embeddings for pose-robust recognition
+        return np.mean(self.last_20_embeddings, axis=0)
+
+
 
 class Person:
     """
@@ -40,23 +79,10 @@ class Person:
         self.roll = 0.0
         self.gaze_x = 0.0
 
+        self.last_20_embeddings = deque(maxlen=20)
         self.is_standing = False
         self.is_looking_away = False
-
-        self.sitting_duration_clock = 0.0
-        self.standing_duration_clock = 0.0
-
-        self.screen_gaze_accumulation_timer = 0.0
-        self.ocular_break_timer = 0.0
-        self.gaze_away_clock = 0.0
-        self.slouch_timer = 0.0
-
-        self.sustained_slouch_debounce_timer = 0.0
-        self.tracking_active_debounce_timer = 0.0
-
-        self.ocular_break_announced = False
-        self.session_limit_announced = False
-        self.slouch_announced = False
+        self.health_status = "Healthy" # local frame copy for logging
 
         self.slouch_sensitivity = 15.0
         self.session_limit = 2400

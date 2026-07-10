@@ -18,30 +18,35 @@ class TestCorrectionEngine(unittest.TestCase):
     def test_forward_lean(self):
         # Torso ratio < 80% of baseline
         person = DummyPerson(ratio=0.35, baseline=0.5)
-        advice = CorrectionEngine.get_advice(person)
+        session = person # Mock session
+        advice = CorrectionEngine.get_advice(person, session)
         self.assertEqual(advice, "Avoid leaning forward.")
 
     def test_spine_deviation(self):
         # abs(spine_alignment) > 20
         person = DummyPerson(spine=25.0)
-        advice = CorrectionEngine.get_advice(person)
+        session = person # Mock session
+        advice = CorrectionEngine.get_advice(person, session)
         self.assertEqual(advice, "Straighten your back.")
 
     def test_neck_pitch(self):
         # pitch - calibrated > 35
         person = DummyPerson(pitch=40.0, cal_pitch=0.0)
-        advice = CorrectionEngine.get_advice(person)
+        session = person # Mock session
+        advice = CorrectionEngine.get_advice(person, session)
         self.assertEqual(advice, "Lift your head.")
 
     def test_shoulder_roll(self):
         # abs(shoulder) > 15
         person = DummyPerson(shoulder=-16.0)
-        advice = CorrectionEngine.get_advice(person)
+        session = person # Mock session
+        advice = CorrectionEngine.get_advice(person, session)
         self.assertEqual(advice, "Relax your shoulders.")
 
     def test_ergonomic_fallback(self):
         person = DummyPerson()  # defaults to perfect posture
-        advice = CorrectionEngine.get_advice(person)
+        session = person # Mock session
+        advice = CorrectionEngine.get_advice(person, session)
         self.assertEqual(advice, "Maintain ergonomic posture.")
 
 

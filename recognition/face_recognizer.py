@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import logging
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional
 from config.settings import settings
 
 logger = logging.getLogger(__name__)

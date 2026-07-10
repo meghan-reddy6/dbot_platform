@@ -2,8 +2,8 @@
   "yolo_pose": {
     "filename": "yolov8n-pose.pt",
     "version": "8.0",
-    "url": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n-pose.pt",
-    "sha256": "",
+    "url": "",
+    "sha256": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
     "framework": "pytorch",
     "required": true,
     "description": "Ultralytics YOLOv8 Nano Pose model for posture tracking."
@@ -11,8 +11,8 @@
   "arcface_embedder": {
     "filename": "mobilefacenet.onnx",
     "version": "1.0",
-    "url": "https://huggingface.co/spaces/hukenovs/face_recognition/resolve/main/models/mobilefacenet.onnx",
-    "sha256": "",
+    "url": "",
+    "sha256": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
     "framework": "onnx",
     "required": true,
     "description": "MobileFaceNet ArcFace embeddings for edge biometric verification."
@@ -21,7 +21,7 @@
     "filename": "face_detector.onnx",
     "version": "1.0",
     "url": "",
-    "sha256": "",
+    "sha256": "b0250fd14b3b44b00f8dbaf1f65744dadaad72ffb763f2fcb3138f91435053ea",
     "framework": "onnx",
     "required": true,
     "description": "Internal Face Detection ONNX model."
@@ -30,7 +30,7 @@
     "filename": "face_landmark_detector.onnx",
     "version": "1.0",
     "url": "",
-    "sha256": "",
+    "sha256": "3738128649fc34c4ba217bca42a3e7a007e6b684cf781492f9abb6a228d71a7e",
     "framework": "onnx",
     "required": true,
     "description": "Internal 5-point Face Landmark ONNX model for alignment."

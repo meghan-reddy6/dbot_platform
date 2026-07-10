@@ -51,10 +51,10 @@ class PostureAnalyzer:
 
     @staticmethod
     def evaluate(
-        person: Person, pose: Dict[str, Keypoint], frame_shape: Tuple[int, int]
+        person: Person, session: "Any", pose: Dict[str, Keypoint], frame_shape: Tuple[int, int]
     ) -> PostureState:
         """
-        Evaluates the current skeletal pose against the person's baseline to determine slouching and standing state.
+        Evaluates the current skeletal pose against the session's baseline to determine slouching and standing state.
         """
         state = PostureState()
 
@@ -84,15 +84,15 @@ class PostureAnalyzer:
         )
         state.neck_pitch = current_neck_pitch_angle
 
-        if getattr(person, "calibrated_baseline_neck_pitch", 0.0) == 0.0:
-            person.calibrated_baseline_neck_pitch = current_neck_pitch_angle
+        if getattr(session, "calibrated_baseline_neck_pitch", 0.0) == 0.0:
+            session.calibrated_baseline_neck_pitch = current_neck_pitch_angle
 
         relative_slouch = (
-            current_neck_pitch_angle - person.calibrated_baseline_neck_pitch
+            current_neck_pitch_angle - session.calibrated_baseline_neck_pitch
         )
 
-        if not hasattr(person, "posture_baseline"):
-            person.posture_baseline = 0.5
+        if not hasattr(session, "posture_baseline"):
+            session.posture_baseline = 0.5
 
         # 3. Shoulder and Spine Alignment
         state.shoulder_alignment = PostureAnalyzer._compute_shoulder_alignment(
@@ -106,11 +106,11 @@ class PostureAnalyzer:
             )
 
         # 4. Slouch Evaluation
-        if person.health_status == "Posture Deficit Alert":
+        if session.health_status == "Posture Deficit Alert":
             # Must satisfy a stricter upright bound to clear an existing alert
             is_fully_upright = (
-                current_torso_depth_ratio >= person.posture_baseline * 0.95
-            ) and (relative_slouch <= person.slouch_sensitivity * 0.40)
+                current_torso_depth_ratio >= session.posture_baseline * 0.95
+            ) and (relative_slouch <= getattr(session, "slouch_sensitivity", 15.0) * 0.40)
             state.is_slouching = not is_fully_upright
         else:
             # Tolerant bounds to trigger a new alert
@@ -118,18 +118,18 @@ class PostureAnalyzer:
                 state.spine_alignment > 15.0
             )  # Leaning sideways > 15 degrees
             state.is_slouching = (
-                (current_torso_depth_ratio < (person.posture_baseline * 0.80))
+                (current_torso_depth_ratio < (session.posture_baseline * 0.80))
                 or (relative_slouch > 35.0)
                 or is_spine_skewed
             )
 
         # 5. Standing Evaluation
         normalized_height_delta = (
-            getattr(person, "baseline_shoulder_y", shoulder_center_y)
+            getattr(session, "baseline_shoulder_y", shoulder_center_y)
             - shoulder_center_y
         ) / max(shoulder_width, 1e-6)
         state.is_standing = (normalized_height_delta > 0.45) or (
-            current_torso_depth_ratio > (person.posture_baseline * 1.85)
+            current_torso_depth_ratio > (session.posture_baseline * 1.85)
         )
 
         return state
