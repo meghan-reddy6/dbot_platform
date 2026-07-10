@@ -1157,7 +1157,7 @@ class TrackerEngine:
         verified_tracks = [
             p
             for p in active_tracks
-            if p.verification_status == "VERIFIED" and p.state == "Tracking Active"
+            if p.verification_status == "VERIFIED" and p.state in ["Tracking Active", "Calibrating", "Posture Deficit", "Ocular Break", "Session Limit", "Standing"]
         ]
         unverified_tracks = [
             p
@@ -1194,7 +1194,7 @@ class TrackerEngine:
         # ---------------------------------------------------------
         is_profile_already_active = any(
             getattr(p, "verification_status", "UNKNOWN") == "VERIFIED"
-            and p.state == "Tracking Active"
+            and p.state in ["Tracking Active", "Calibrating", "Posture Deficit", "Ocular Break", "Session Limit", "Standing"]
             for p in self.tracked_persons.values()
         )
 
@@ -1301,7 +1301,8 @@ class TrackerEngine:
         closest_dist = float("inf")
 
         for p in self.tracked_persons.values():
-            if p.state in ["Tracking Active", "Calibrating"] and p.verification_status == "VERIFIED":
+            # Include all states that represent an actively tracked and verified user.
+            if p.state in ["Tracking Active", "Calibrating", "Posture Deficit", "Ocular Break", "Session Limit", "Standing"] and p.verification_status == "VERIFIED":
                 track_cx = (p.box[0] + p.box[2]) / 2.0
                 dist = abs(track_cx - frame_cx)
 
