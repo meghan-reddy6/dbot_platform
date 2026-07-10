@@ -128,8 +128,15 @@ class PostureAnalyzer:
             getattr(session, "baseline_shoulder_y", shoulder_center_y)
             - shoulder_center_y
         ) / max(shoulder_width, 1e-6)
-        state.is_standing = (normalized_height_delta > 0.45) or (
-            current_torso_depth_ratio > (session.posture_baseline * 1.85)
+        
+        box_h = person.box[3] - person.box[1]
+        box_w = person.box[2] - person.box[0]
+        box_ratio = box_h / max(box_w, 1.0)
+        
+        # A true stand causes a massive vertical shift or a significantly taller bounding box.
+        # We use strict thresholds to prevent simple forward leaning from triggering this.
+        state.is_standing = (normalized_height_delta > 0.85) or (
+            current_torso_depth_ratio > (session.posture_baseline * 2.2) and box_ratio > 1.8
         )
 
         return state
