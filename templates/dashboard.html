@@ -112,6 +112,117 @@
     50% { background: rgba(80, 0, 0, 0.6); box-shadow: 0 0 30px rgba(255, 0, 0, 0.9), inset 0 0 20px rgba(255, 0, 0, 0.5); border: 1px solid rgba(255, 0, 0, 1.0); }
     100% { background: rgba(30, 0, 0, 0.4); box-shadow: 0 0 10px rgba(255, 0, 0, 0.4), inset 0 0 10px rgba(255, 0, 0, 0.2); border: 1px solid rgba(255, 0, 0, 0.5); }
 }
+
+/* Tell-Tale Dashboard Animations */
+.telltale-box {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.4s ease;
+    opacity: 0.25; 
+    filter: grayscale(80%);
+}
+.telltale-active {
+    opacity: 1;
+    filter: grayscale(0%);
+}
+
+.telltale-glow-green { box-shadow: 0 0 12px rgba(16, 185, 129, 0.4), inset 0 0 10px rgba(16, 185, 129, 0.2); border-color: #10b981; }
+.telltale-glow-blue { box-shadow: 0 0 12px rgba(56, 189, 248, 0.4), inset 0 0 10px rgba(56, 189, 248, 0.2); border-color: #38bdf8; }
+.telltale-glow-orange { box-shadow: 0 0 12px rgba(245, 158, 11, 0.4), inset 0 0 10px rgba(245, 158, 11, 0.2); border-color: #f59e0b; }
+.telltale-glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), inset 0 0 15px rgba(239, 68, 68, 0.4); border-color: #ef4444; }
+.telltale-glow-purple { box-shadow: 0 0 12px rgba(168, 85, 247, 0.4), inset 0 0 10px rgba(168, 85, 247, 0.2); border-color: #a855f7; }
+.telltale-glow-gray { box-shadow: 0 0 10px rgba(148, 163, 184, 0.3), inset 0 0 8px rgba(148, 163, 184, 0.1); border-color: #94a3b8; }
+
+.anim-breathe { animation: breathe 4s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+
+.anim-rotate-scan { animation: spin 4s linear infinite; transform-origin: 50px 20px; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+.anim-pulse-gentle { animation: pulseG 3s infinite; }
+@keyframes pulseG { 0%, 100% { opacity: 0.8; transform: scale(1); } 50% { opacity: 1; transform: scale(1.02); } }
+
+.anim-pulse-warn { animation: pulseW 2s infinite; }
+@keyframes pulseW { 0%, 100% { opacity: 0.7; transform: scale(1); } 50% { opacity: 1; transform: scale(1.05); } }
+
+.anim-pulse-crit { animation: pulseC 1s infinite; }
+@keyframes pulseC { 0%, 100% { opacity: 0.6; transform: scale(1); box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); } 50% { opacity: 1; transform: scale(1.05); box-shadow: 0 0 25px rgba(239, 68, 68, 0.8); } }
+
+.anim-scan-y { animation: scanY 2s linear infinite; }
+@keyframes scanY { 0% { transform: translateY(-40px); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(40px); opacity: 0; } }
+
+.anim-float { animation: float 2s ease-in-out infinite; }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+.anim-sparkle { animation: sparkle 2s infinite; }
+@keyframes sparkle { 0%, 100% { opacity: 0; transform: scale(0.5); } 50% { opacity: 1; transform: scale(1); } }
+
+/* CSS State Transitions for Persistent SVGs */
+.svg-part { transition: all 0.4s ease; stroke: inherit; fill: inherit; }
+.svg-torso { transform-origin: 50px 65px; }
+.svg-head { transform-origin: 50px 20px; }
+.svg-overlay { opacity: 0; transition: opacity 0.3s ease; }
+
+/* Base Colors */
+.tracking-calibrating { stroke: #38bdf8; fill: #38bdf8; color: #38bdf8; }
+.tracking-searching { stroke: #94a3b8; fill: #94a3b8; color: #94a3b8; }
+.tracking-active { stroke: #64748b; fill: #64748b; color: #64748b; }
+
+.posture-healthy { stroke: #10b981; fill: #10b981; color: #10b981; }
+.posture-slouching { stroke: #f59e0b; fill: #f59e0b; color: #f59e0b; }
+.posture-critical { stroke: #ef4444; fill: #ef4444; color: #ef4444; }
+.posture-inactive { stroke: #64748b; fill: #64748b; color: #64748b; }
+
+.eyes-ocular_break { stroke: #a855f7; fill: #a855f7; color: #a855f7; }
+.eyes-normal { stroke: #64748b; fill: #64748b; color: #64748b; }
+.eyes-inactive { stroke: #64748b; fill: #64748b; color: #64748b; }
+
+.sitting-normal { stroke: #10b981; fill: #10b981; color: #10b981; }
+.sitting-warning { stroke: #f59e0b; fill: #f59e0b; color: #f59e0b; }
+.sitting-exceeded { stroke: #ef4444; fill: #ef4444; color: #ef4444; }
+.sitting-inactive { stroke: #64748b; fill: #64748b; color: #64748b; }
+
+.movement-standing_break { stroke: #10b981; fill: #10b981; color: #10b981; }
+.movement-standing_complete { stroke: #10b981; fill: #10b981; color: #10b981; }
+.movement-inactive { stroke: #64748b; fill: #64748b; color: #64748b; }
+
+/* Tracking State Logic */
+.tracking-searching .svg-body { opacity: 0.4; stroke-dasharray: 4 4; }
+.tracking-searching .overlay-scanline { opacity: 1; }
+.tracking-calibrating .overlay-calib { opacity: 1; }
+
+/* Posture State Logic */
+.posture-slouching .svg-torso { transform: rotate(15deg); }
+.posture-slouching .svg-head { transform: translate(0px, 5px); }
+.posture-critical .svg-torso { transform: rotate(35deg); }
+.posture-critical .svg-head { transform: translate(0px, 10px); }
+.posture-critical .overlay-warning { opacity: 1; }
+
+/* Eyes State Logic */
+.eyes-ocular_break .svg-head { transform: translate(-5px, 0px); }
+.eyes-ocular_break .eyes-forward { display: none; }
+.eyes-ocular_break .eyes-left { display: block; opacity: 1; }
+.eyes-ocular_break .overlay-eye { opacity: 1; }
+.eyes-normal .eyes-left { display: none; }
+
+/* Sitting State Logic */
+.sitting-normal .overlay-stopwatch { opacity: 1; }
+.sitting-warning .overlay-stopwatch { opacity: 1; }
+.sitting-exceeded .overlay-stopwatch { opacity: 1; }
+.sitting-exceeded .overlay-uparrow { opacity: 1; }
+
+/* Movement State Logic */
+.movement-standing_break .overlay-ring { opacity: 1; }
+.movement-standing_break .overlay-uparrow { opacity: 1; }
+.movement-standing_complete .overlay-check { opacity: 1; }
+.movement-standing_complete .overlay-sparkle { opacity: 1; }
+
 </style>
 </head>
 <body>
@@ -166,16 +277,164 @@
     </div>
 
     <script>
-        function getEmoji(state) {
-            if (!state) return "⏸️";
-            if (state.includes("Active") || state.includes("Tracking Active")) return "🧘";
-            if (state.includes("Looking Away") || state.includes("Ocular Break")) return "👀";
-            if (state.includes("Standing")) return "🧍";
-            if (state.includes("Session Limit Reached")) return "🚨";
-            if (state.includes("Posture Deficit Alert")) return "⚠️";
-            if (state.includes("Calibrating")) return "⚙️";
-            if (state.includes("Unregistered Guest")) return "🔒";
-            return "⏸️";
+        const SvgElements = {
+            chair: `<path d="M 30 65 L 70 65 L 70 95 M 30 65 L 30 35" fill="none" stroke-width="4" stroke-linecap="round" stroke="rgba(255,255,255,0.2)"/>`,
+            legsSitting: `<path d="M 50 65 L 75 65 L 75 95" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" class="svg-part svg-body"/>`,
+            legsStanding: `<path d="M 50 65 L 50 95 M 50 95 L 45 95 M 50 95 L 55 95" fill="none" stroke-width="8" stroke-linecap="round" class="svg-part"/>`,
+            torso: `<path d="M 50 35 L 50 65" fill="none" stroke-width="10" stroke-linecap="round" class="svg-part svg-torso svg-body"/>`,
+            head: `
+                <g class="svg-part svg-head svg-body">
+                    <circle cx="50" cy="20" r="12" class="svg-part"/>
+                    <g class="eyes-forward"><circle cx="45" cy="18" r="1.5" fill="#0f172a"/><circle cx="55" cy="18" r="1.5" fill="#0f172a"/></g>
+                    <g class="eyes-left" style="display:none;"><circle cx="42" cy="18" r="1.5" fill="#0f172a"/></g>
+                </g>
+            `,
+            calibScan: `<circle cx="50" cy="20" r="22" fill="none" stroke-width="2" class="svg-part svg-overlay overlay-calib anim-rotate-scan" stroke-dasharray="20 10"/>`,
+            scanLine: `<line x1="20" y1="50" x2="80" y2="50" stroke-width="2" class="svg-part svg-overlay overlay-scanline anim-scan-y"/>`,
+            warningBadge: `<g class="svg-part svg-overlay overlay-warning" transform="translate(85, 25)"><circle cx="0" cy="0" r="8"/><line x1="0" y1="-4" x2="0" y2="2" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="0" cy="5" r="1" fill="#fff"/></g>`,
+            eye: `<g class="svg-part svg-overlay overlay-eye" transform="translate(80, 20)"><path d="M-8 0 Q0 -8 8 0 Q0 8 -8 0" fill="none" stroke-width="2"/><circle cx="0" cy="0" r="3"/></g>`,
+            stopwatch: `
+                <g class="svg-part svg-overlay overlay-stopwatch" transform="translate(80, 25)">
+                    <circle cx="0" cy="0" r="12" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+                    <circle cx="0" cy="0" r="12" fill="none" stroke-width="3" stroke-dasharray="75.39" stroke-dashoffset="var(--timer-offset, 75.39)" transform="rotate(-90)"/>
+                    <line x1="0" y1="0" x2="0" y2="-8" stroke-width="2"/>
+                    <line x1="0" y1="-14" x2="0" y2="-17" stroke-width="3"/>
+                </g>`,
+            upArrow: `<path d="M85 40 L85 20 M75 30 L85 20 L95 30" fill="none" stroke-width="4" stroke-linecap="round" class="svg-part svg-overlay overlay-uparrow anim-float"/>`,
+            progressRing: `
+                <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="4" class="svg-part svg-overlay overlay-ring"/>
+                <circle cx="50" cy="50" r="40" fill="none" stroke-width="4" stroke-dasharray="251.32" stroke-dashoffset="var(--stand-offset, 251.32)" transform="rotate(-90 50 50)" class="svg-part svg-overlay overlay-ring"/>
+            `,
+            check: `<path d="M65 35 L75 45 L90 25" fill="none" stroke-width="4" stroke-linecap="round" class="svg-part svg-overlay overlay-check"/>`,
+            sparkles: `<path d="M80 15 L82 20 L87 22 L82 24 L80 29 L78 24 L73 22 L78 20 Z" class="svg-part svg-overlay overlay-sparkle anim-sparkle"/>`
+        };
+
+        function buildDashboardDOM(trackId) {
+            const boxes = [
+                { id: 'tracking', label: 'Tracking', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.calibScan + SvgElements.scanLine },
+                { id: 'posture', label: 'Posture', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.warningBadge },
+                { id: 'eyes', label: 'Eyes', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.eye },
+                { id: 'sitting', label: 'Sitting', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.stopwatch + SvgElements.upArrow },
+                { id: 'movement', label: 'Movement', base: SvgElements.legsStanding + SvgElements.torso + SvgElements.head, overlays: SvgElements.progressRing + SvgElements.upArrow + SvgElements.check + SvgElements.sparkles }
+            ];
+
+            let html = `<div class="dashboard-matrix" style="display: flex; flex-wrap: nowrap; gap: 16px; justify-content: center; width: 100%;">`;
+            boxes.forEach(b => {
+                html += `
+                    <div id="box-${trackId}-${b.id}" class="telltale-box" style="width: 100px; height: 120px;">
+                        <svg viewBox="0 0 100 100" style="width: 70px; height: 70px;">
+                            ${b.base}
+                            ${b.overlays}
+                        </svg>
+                        <div id="label-${trackId}-${b.id}" style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; text-align: center; margin-top: 8px; line-height: 1.2; transition: color 0.4s ease;">
+                            ${b.label}
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div>`;
+            return html;
+        }
+
+        const stateDebouncers = new Map();
+        const DEBOUNCE_MS = 1500;
+
+        function updateStateDebounced(trackId, subsystem, newState, indicatorsDict, pctVal = 0) {
+            const key = `${trackId}-${subsystem}`;
+            
+            // Apply percentages immediately via CSS vars so timers move smoothly
+            const box = document.getElementById(`box-${trackId}-${subsystem}`);
+            if (box) {
+                if (subsystem === 'sitting') {
+                    const offset = ((100 - pctVal) / 100) * 75.39;
+                    box.style.setProperty('--timer-offset', offset);
+                } else if (subsystem === 'movement') {
+                    const offset = ((100 - pctVal) / 100) * 251.32;
+                    box.style.setProperty('--stand-offset', offset);
+                }
+            }
+
+            if (!stateDebouncers.has(key)) {
+                stateDebouncers.set(key, { currentState: '', pendingState: '', timerId: null });
+            }
+            
+            const stateObj = stateDebouncers.get(key);
+            
+            if (stateObj.currentState === newState) {
+                if (stateObj.timerId) { clearTimeout(stateObj.timerId); stateObj.timerId = null; }
+                return;
+            }
+            
+            if (stateObj.pendingState !== newState) {
+                stateObj.pendingState = newState;
+                if (stateObj.timerId) clearTimeout(stateObj.timerId);
+                
+                stateObj.timerId = setTimeout(() => {
+                    stateObj.currentState = newState;
+                    applyStateDOM(trackId, subsystem, newState, indicatorsDict);
+                }, DEBOUNCE_MS);
+            }
+        }
+
+        function applyStateDOM(trackId, subsystem, state, indicatorsDict) {
+            const box = document.getElementById(`box-${trackId}-${subsystem}`);
+            const label = document.getElementById(`label-${trackId}-${subsystem}`);
+            if (!box || !label) return;
+
+            let isActive = state !== 'inactive';
+
+            // Priority Logic: Dim Posture if Tracking is Searching
+            if (subsystem === 'posture' && indicatorsDict.tracking === 'searching') {
+                isActive = false;
+                state = 'inactive';
+            }
+
+            let animClass = "";
+            let glow = "";
+            let labelText = subsystem;
+
+            // Map state to visuals
+            if (subsystem === 'tracking') {
+                if (state === 'calibrating') { glow = "blue"; animClass = "anim-breathe"; labelText = "Calibrating"; }
+                else if (state === 'searching') { glow = "gray"; labelText = "Searching"; isActive = false; }
+                else { glow = "green"; labelText = "Tracking"; }
+            } else if (subsystem === 'posture') {
+                if (state === 'critical') { glow = "red"; animClass = "anim-pulse-crit"; labelText = "Crit. Slouch"; }
+                else if (state === 'slouching') { glow = "orange"; animClass = "anim-pulse-warn"; labelText = "Slouching"; }
+                else if (state === 'healthy') { glow = "green"; animClass = "anim-breathe"; labelText = "Healthy"; }
+                else { glow = "gray"; labelText = "Posture"; isActive = false; }
+            } else if (subsystem === 'eyes') {
+                if (state === 'ocular_break') { glow = "purple"; animClass = "anim-breathe"; labelText = "Ocular Break"; }
+                else if (state === 'normal') { glow = "green"; labelText = "Eyes Tracked"; }
+                else { glow = "gray"; labelText = "Eye Health"; isActive = false; }
+            } else if (subsystem === 'sitting') {
+                if (state === 'exceeded') { glow = "red"; animClass = "anim-pulse-warn"; labelText = "Limit Exceeded"; }
+                else if (state === 'warning') { glow = "orange"; animClass = "anim-breathe"; labelText = "Time Warning"; }
+                else if (state === 'normal') { glow = "green"; animClass = "anim-breathe"; labelText = "Sitting"; }
+                else { glow = "gray"; labelText = "Sitting"; isActive = false; }
+            } else if (subsystem === 'movement') {
+                if (state === 'standing_complete') { glow = "green"; animClass = "anim-breathe"; labelText = "Stand Done"; }
+                else if (state === 'standing_break') { glow = "green"; animClass = "anim-breathe"; labelText = "Stand Break"; }
+                else { glow = "gray"; labelText = "Movement"; isActive = false; }
+            }
+
+            box.className = `telltale-box ${subsystem}-${state} ${isActive ? `telltale-active telltale-glow-${glow} ${animClass}` : ''}`;
+            label.innerText = labelText;
+            label.style.color = isActive ? `var(--tw-colors-${glow}-500, ${glow})` : '#64748b'; // simplified color map
+            if (glow === 'orange') label.style.color = '#f59e0b';
+if (glow === 'red') label.style.color = '#ef4444';
+            if (glow === 'green') label.style.color = '#10b981';
+            if (glow === 'blue') label.style.color = '#38bdf8';
+            if (glow === 'purple') label.style.color = '#a855f7';
+            if (glow === 'gray') label.style.color = '#94a3b8';
+        }
+
+        async function getProfileConfig(name) {
+            try {
+                const res = await fetch('/api/profiles');
+                const profiles = await res.json();
+                return profiles[name] || {};
+            } catch { return {}; }
         }
 
         async function refreshLiveTelemetry() {
@@ -196,7 +455,7 @@
                 
                 const currentTrackIds = new Set();
                 
-                targets.forEach(t => {
+                for (const t of targets) {
                     currentTrackIds.add(String(t.id));
                     
                     let sittingTime = t.sitting_time !== undefined ? Math.round(t.sitting_time) : 0;
@@ -204,77 +463,32 @@
                     let headPitch = t.pitch !== undefined ? Math.round(t.pitch) : 0;
                     let sessionLimit = t.session_limit !== undefined ? Math.round(t.session_limit) : 1200;
                     let standRequirement = t.stand_requirement !== undefined ? Math.round(t.stand_requirement) : 180;
-                    
                     let sitPct = Math.min(100, (sittingTime / sessionLimit) * 100);
                     let standPct = Math.min(100, (standingTime / standRequirement) * 100);
-                    
-                    const isWarning = t.state && (t.state.includes("Alert") || t.state.includes("Ocular"));
-                    const isCritical = t.state && t.state.includes("Session Limit");
-                    const isCalibrating = t.state && t.state.includes("Calibrating");
-                    
-                    let cardClass = "glass-card";
-                    if (isCritical) cardClass += " critical";
-                    else if (isWarning) cardClass += " warning";
-                    else if (isCalibrating) cardClass += " calibrating";
-                    
-                    if (t.state && t.state.includes("Posture Deficit")) {
-                        cardClass += " slouch-alert";
-                    }
-                    
-                    const stateStr = t.state || "";
-                    const isCalib = stateStr.includes("Calibrating");
-                    const isActiveSit = stateStr.includes("Tracking Active") || stateStr.includes("Looking Away");
-                    const isSlouch = stateStr.includes("Posture Deficit");
-                    const isOcular = stateStr.includes("Ocular Break");
-                    const isSession = stateStr.includes("Session Limit");
-                    const isStand = stateStr === "Standing";
-                    const isCoast = !isCalib && !isActiveSit && !isSlouch && !isOcular && !isSession && !isStand;
-
-                    const renderStateBlock = (active, iconSvg, label, color) => `
-                        <div style="flex: 1; text-align: center; padding: 10px 2px; border-radius: 8px; background: rgba(0,0,0,0.3); transition: all 0.4s ease;
-                                    ${active ? `opacity: 1.0; border: 1px solid ${color}; box-shadow: 0 0 16px ${color}A0; filter: blur(0px); grayscale(0%);` 
-                                             : `opacity: 0.20; border: 1px solid transparent; filter: blur(1.5px) grayscale(70%);`}">
-                            <div style="width: 24px; height: 24px; margin: 0 auto 4px auto; color: ${active ? color : '#94a3b8'};">
-                                ${iconSvg}
-                            </div>
-                            <div style="font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.1; color: ${active ? color : '#cbd5e1'};">${label}</div>
-                        </div>
-                    `;
-
-                    const iconCalib = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="animate-spin" style="width:100%;height:100%;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
-                    const iconActive = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><circle cx="12" cy="7" r="4"></circle><path d="M5.5 21v-8a6.5 6.5 0 0 1 13 0v8"></path></svg>';
-                    const iconSlouch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-                    const iconOcular = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
-                    const iconLimit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>';
-                    const iconStand = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>'; 
-                    const iconCoast = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%;"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>';
-
-                    const statesHtml = `
-                        ${renderStateBlock(isCalib, iconCalib, "Calibrating", "#38bdf8")}
-                        ${renderStateBlock(isActiveSit, iconActive, "Active", "#10b981")}
-                        ${renderStateBlock(isSlouch, iconSlouch, "Posture", "#f59e0b")}
-                        ${renderStateBlock(isOcular, iconOcular, "Ocular", "#a855f7")}
-                        ${renderStateBlock(isSession, iconLimit, "Limit", "#ef4444")}
-                        ${renderStateBlock(isStand, iconStand, "Standing", "#3b82f6")}
-                        ${renderStateBlock(isCoast, iconCoast, "Searching", "#64748b")}
-                    `;
                     
                     let card = document.getElementById(`target-card-${t.id}`);
                     
                     if (!card) {
                         card = document.createElement('div');
                         card.id = `target-card-${t.id}`;
-                        card.className = cardClass;
+                        card.className = "glass-card";
+                        
+                        const profileConfig = await getProfileConfig(t.name);
+                        const isUnknown = t.name.startsWith("Unknown");
+                        const uiName = isUnknown ? `Unregistered #${t.id}` : t.name;
+                        
                         card.innerHTML = `
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem;">
                                 <div style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Live Status Matrix</div>
                                 <div style="text-align: right; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 20px;">
                                     <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">ACTIVE WORKSPACE USER:</span>
-                                    <span id="name-${t.id}" style="font-size: 1rem; color: #fff; font-weight: 500;"></span>
+                                    <span id="name-${t.id}" style="font-size: 1rem; color: #fff; font-weight: 500;">${uiName}</span>
                                 </div>
                             </div>
                             
-                            <div id="states-${t.id}" style="display: flex; gap: 6px; margin-bottom: 2rem;">
+                            <!-- PERSISTENT DASHBOARD MATRIX -->
+                            <div id="matrix-container-${t.id}" style="margin-bottom: 2rem;">
+                                ${buildDashboardDOM(t.id)}
                             </div>
                             
                             <div style="margin-top: 1.5rem;">
@@ -329,10 +543,14 @@
                         container.appendChild(card);
                     }
                     
-                    // IN-PLACE DOM UPDATES
-                    card.className = cardClass;
-                    document.getElementById(`name-${t.id}`).textContent = t.name;
-                    document.getElementById(`states-${t.id}`).innerHTML = statesHtml;
+                    // DEBOUNCED UI DOM UPDATES (No HTML regeneration)
+                    if (t.dashboard_indicators) {
+                        updateStateDebounced(t.id, 'tracking', t.dashboard_indicators.tracking, t.dashboard_indicators);
+                        updateStateDebounced(t.id, 'posture', t.dashboard_indicators.posture, t.dashboard_indicators);
+                        updateStateDebounced(t.id, 'eyes', t.dashboard_indicators.eyes, t.dashboard_indicators);
+                        updateStateDebounced(t.id, 'sitting', t.dashboard_indicators.sitting, t.dashboard_indicators, sitPct);
+                        updateStateDebounced(t.id, 'movement', t.dashboard_indicators.movement, t.dashboard_indicators, standPct);
+                    }
                     
                     document.getElementById(`sit-text-${t.id}`).textContent = `${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m`;
                     const sitBar = document.getElementById(`sit-bar-${t.id}`);
@@ -342,14 +560,16 @@
                     document.getElementById(`stand-text-${t.id}`).textContent = `${standingTime}s / ${standRequirement}s`;
                     document.getElementById(`stand-bar-${t.id}`).style.width = `${standPct}%`;
                     
-                    document.getElementById(`gaze-text-${t.id}`).textContent = `${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m`;
-                    document.getElementById(`gaze-bar-${t.id}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
-                    
                     document.getElementById(`pitch-val-${t.id}`).textContent = `${headPitch}°`;
                     document.getElementById(`spine-val-${t.id}`).textContent = `${Math.round(t.spine_alignment || 0)}°`;
                     document.getElementById(`shoulder-val-${t.id}`).textContent = `${Math.round(t.shoulder_alignment || 0)}°`;
-                    document.getElementById(`ocular-val-${t.id}`).textContent = `${t.ocular_break_current}s / ${t.ocular_break_max}s`;
-                });
+                    
+                    if(t.screen_gaze_current !== undefined) {
+                        document.getElementById(`gaze-text-${t.id}`).textContent = `${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m`;
+                        document.getElementById(`gaze-bar-${t.id}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
+                        document.getElementById(`ocular-val-${t.id}`).textContent = `${Math.round(t.ocular_break_current || 0)}s / ${Math.round(t.ocular_break_max || 0)}s`;
+                    }
+                }
                 
                 // Cleanup stale cards dynamically
                 Array.from(container.children).forEach(child => {
@@ -372,7 +592,8 @@
                 const profiles = await res.json();
                 
                 const container = document.getElementById('profiles-container');
-                let html = `<table>
+                let html = `<div style="overflow-x: auto; padding-bottom: 15px; width: 100%;">
+                    <table style="min-width: 1100px;">
                     <tr>
                         <th>Name</th>
                         <th>3D Posture Tolerance Edge</th>
@@ -406,7 +627,7 @@
                         </tr>
                     `;
                 });
-                html += '</table>';
+                html += '</table></div>';
                 container.innerHTML = html;
             } catch (e) {
                 console.error("Profile sync error", e);

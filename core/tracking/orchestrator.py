@@ -454,7 +454,9 @@ class TrackerEngine:
             "Looking Away",
             "Searching / Re-acquiring",
         ]:
-            if not person.is_looking_away:
+            is_effectively_looking_away = person.is_looking_away or (person.state == "Searching / Re-acquiring")
+
+            if not is_effectively_looking_away:
                 session.screen_gaze_accumulation_timer += dt
                 if session.health_status != "Ocular Break Recommended":
                     session.ocular_break_timer = 0.0
@@ -512,7 +514,7 @@ class TrackerEngine:
                     )
                     session.ocular_break_announced = True
 
-                if person.is_looking_away:
+                if is_effectively_looking_away:
                     session.ocular_break_timer += dt
                     if session.ocular_break_timer >= getattr(person, "gaze_away_limit", 20):
                         session.screen_gaze_accumulation_timer = 0.0
