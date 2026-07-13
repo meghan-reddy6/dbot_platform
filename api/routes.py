@@ -165,6 +165,7 @@ def system_health():
             "has_npu": hardware.has_npu,
             "ram_gb": hardware.total_ram_gb,
             "tracked_targets": total_tracked,
+            "last_system_message": health_evaluator.last_system_message if hasattr(health_evaluator, "last_system_message") else "",
         }
     )
 

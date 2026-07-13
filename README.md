@@ -35,7 +35,6 @@ dbot/
 ├── detection/              # YOLO Person Detector and Face Detectors
 ├── posture/                # Posture Evaluation algorithms & Correction Engine
 ├── recognition/            # ArcFace Biometric Embeddings 
-├── static/                 # Web Dashboard CSS/JS assets
 ├── templates/              # HTML Web Dashboard
 ├── tests/                  # Unit tests and script sandboxes
 ├── profiles_cache.json     # Saved biometric embeddings

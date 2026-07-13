@@ -151,6 +151,9 @@
         <!-- PROFILE MANAGEMENT INTERFACE (Bottom span 100%) -->
         <div class="glass-card" style="width: 100%; overflow-x: auto; box-sizing: border-box;">
             <h3 style="margin-top: 0; color: #e2e8f0; font-weight: 400; font-size: 1.5rem;">Profile Control Manager Grid</h3>
+            <div id="system-message-container" style="color: #10b981; font-size: 0.95rem; font-style: italic; margin-bottom: 1rem; border-left: 3px solid #10b981; padding-left: 10px; background: rgba(16, 185, 129, 0.1); padding: 8px 12px; border-radius: 4px;">
+                <strong>Last Spoken Alert:</strong> <span id="system-message-text">Awaiting messages...</span>
+            </div>
             <div style="margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
                 <input type="text" id="new-profile-name" placeholder="Enter New Profile Name">
                 <button onclick="createProfile()">Register Current Unknown</button>
@@ -374,9 +377,9 @@
                         <th>Name</th>
                         <th>3D Posture Tolerance Edge</th>
                         <th>Continuous Sitting Cap (Minutes)</th>
-                        <th>Required Stand Duration (Seconds)</th>
+                        <th>Required Stand Duration (Minutes)</th>
                         <th>Screen Gaze Limit (Minutes)</th>
-                        <th>Ocular Break Duration (Seconds)</th>
+                        <th>Ocular Break Duration (Minutes)</th>
                         <th>History Export</th>
                         <th>Actions</th>
                     </tr>`;
@@ -385,14 +388,16 @@
                     const p = profiles[username];
                     let gazeLimitMin = Math.round(p.screen_gaze_limit / 60); 
                     let sitLimitMin = Math.round(p.session_limit / 60);
+                    let standReqMin = Math.max(1, Math.round(p.stand_requirement / 60));
+                    let breakDurationMin = Math.max(1, Math.round(p.ocular_break_duration / 60));
                     html += `
                         <tr>
                             <td style="font-weight: 500;">${username}</td>
                             <td><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${username}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
                             <td><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
-                            <td><input type="range" min="30" max="600" step="30" value="${p.stand_requirement}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, this.value, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.stand_requirement}s</span></td>
-                            <td><input type="range" min="5" max="60" step="5" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
-                            <td><input type="range" min="5" max="120" step="5" value="${p.ocular_break_duration}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, this.value)"> <span>${p.ocular_break_duration}s</span></td>
+                            <td><input type="range" min="1" max="15" step="1" value="${standReqMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, (this.value * 60), ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${standReqMin}m</span></td>
+                            <td><input type="range" min="1" max="120" step="1" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
+                            <td><input type="range" min="1" max="15" step="1" value="${breakDurationMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, (this.value * 60))"> <span>${breakDurationMin}m</span></td>
                             <td>
                                 <a href="/api/export/csv/${username}" target="_blank" style="color: #10b981; text-decoration: none; font-size: 0.85rem; margin-right: 8px;">CSV</a>
                                 <a href="/api/export/json/${username}" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.85rem;">JSON</a>
@@ -484,6 +489,11 @@
                     </div>
                 `;
                 document.getElementById('diagnostics-container').innerHTML = diagHtml;
+                
+                if (health.last_system_message) {
+                    const msgEl = document.getElementById('system-message-text');
+                    if (msgEl) msgEl.innerText = health.last_system_message;
+                }
             } catch (e) {
                 console.error("System diagnostics error", e);
             }

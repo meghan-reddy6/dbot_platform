@@ -74,6 +74,7 @@ class TrackerEngine:
         """Initializes the health tracking engine and tracking dictionaries."""
         self.mutex = threading.Lock()
         self.db_manager = db_manager
+        self.last_system_message = "System Boot Sequence Complete. Awaiting targets..."
 
         import os
         import json
@@ -177,8 +178,10 @@ class TrackerEngine:
             if not data:
                 raise ValueError("JSON file is empty")
 
-            for name, vectors in data.items():
+            for name, profile_data in data.items():
                 if name in self.profiles:
+                    # Fix nested dictionary extraction from profiles_cache.json
+                    vectors = profile_data.get("embeddings", profile_data) if isinstance(profile_data, dict) else profile_data
                     self.profiles[name]["embeddings"] = [
                         np.array(v, dtype=np.float32) for v in vectors
                     ]
@@ -295,6 +298,7 @@ class TrackerEngine:
     ) -> None:
         """Dispatches an asynchronous voice alert through the dedicated daemon queue."""
         if hasattr(self, "alert_manager"):
+            self.last_system_message = text
             self.alert_manager.dispatch(text, category, cooldown, identity)
 
     def _evaluate_single_target_health(
