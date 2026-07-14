@@ -253,7 +253,7 @@
                                 <span style="color: #94a3b8; font-size: 0.9rem;">Status: </span>
                                 <span style="color: #10b981; font-weight: bold;">✓ Calibrated</span>
                             </div>
-                            <button type="button" class="btn btn-primary" onclick="alert('Calibration triggered!');">Recalibrate</button>
+                            <button type="button" class="btn btn-primary" onclick="triggerCalibration()">Recalibrate</button>
                         </div>
                     </div>
                     
@@ -434,6 +434,17 @@
                     showToast("Import successful!");
                 }
             });
+        }
+        
+        async function triggerCalibration() {
+            try {
+                const res = await fetch('/api/profile/recalibrate', { method: 'POST' });
+                if(res.ok) {
+                    showToast("Calibration Started. Please sit straight.");
+                }
+            } catch(e) {
+                console.error("Failed to trigger calibration:", e);
+            }
         }
         
         function showToast(msg = "Settings saved successfully!") {
