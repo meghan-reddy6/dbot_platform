@@ -117,9 +117,10 @@ class PostureAnalyzer:
             is_spine_skewed = (
                 state.spine_alignment > 15.0
             )  # Leaning sideways > 15 degrees
+            slouch_sensitivity = getattr(session, "slouch_sensitivity", 15.0)
             state.is_slouching = (
-                (current_torso_depth_ratio < (session.posture_baseline * 0.80))
-                or (relative_slouch > 35.0)
+                (current_torso_depth_ratio < (session.posture_baseline * 0.85))
+                or (relative_slouch > slouch_sensitivity)
                 or is_spine_skewed
             )
 

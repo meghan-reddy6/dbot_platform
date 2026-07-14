@@ -13,8 +13,8 @@ class EdgeConfig:
     database_path: str = "wellness_logs.db"
 
     # Biometric Tracking Tolerances (ArcFace)
-    recognition_threshold_initial: float = 0.55
-    ambiguity_margin: float = 0.15
+    recognition_threshold_initial: float = 0.25
+    ambiguity_margin: float = 0.05
     confirmation_frame_count: int = 5
     
     # Face Quality Bounds

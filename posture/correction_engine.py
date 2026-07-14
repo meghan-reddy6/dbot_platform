@@ -27,7 +27,8 @@ class CorrectionEngine:
         # 3. Severe Neck Pitch
         cal_pitch = getattr(session, "calibrated_baseline_neck_pitch", 0.0)
         relative_slouch = getattr(person, "pitch", 0.0) - cal_pitch
-        if relative_slouch > settings.neck_pitch_tolerance_degrees:
+        slouch_sensitivity = getattr(session, "slouch_sensitivity", 15.0)
+        if relative_slouch > slouch_sensitivity:
             return "Lift your head."
 
         # 4. Shoulder Roll/Asymmetry
