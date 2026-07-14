@@ -10,7 +10,8 @@ The primary goal of DeskBot V3 is to promote healthy ergonomic habits for desk w
 - **Biometric Identity Persistence:** Uses MobileFaceNet (ArcFace) embeddings to identify users and persist their session data even if they temporarily leave the frame.
 - **Dynamic 3D Head Pose Estimation:** Calculates pitch, yaw, and roll using Perspective-n-Point (PnP) geometry for neck strain and gaze tracking.
 - **Automatic Audio Alerts:** Queued, thread-safe text-to-speech (TTS) engine that issues corrective audio prompts (e.g., "Lift your head", "Avoid leaning forward").
-- **Live Web Dashboard:** Local Flask-based dashboard offering real-time telemetry, session metrics, and a live-annotated camera feed.
+- **Live Web Dashboard & Configuration:** Local Flask-based dashboard offering real-time telemetry, session metrics, a live-annotated camera feed, and a hot-reloading settings interface.
+- **Persistent JSON Configuration:** Allows users to override system defaults via a clean UI, saving preferences locally to `data/settings.json` without requiring restarts.
 - **Hardware Acceleration:** Native Windows DirectML and ONNX Runtime support for highly efficient local Edge AI inference.
 
 ## Tech Stack
@@ -31,11 +32,12 @@ dbot/
 │   └── model_manager.py    # Downloads and validates ONNX/YOLO models
 ├── alerts/                 # Thread-safe TTS Audio Alert Manager
 ├── analytics/              # SQLite Database and Dashboard Session Exporter
-├── config/                 # Pydantic Settings and Model Manifests
+├── config/                 # Settings Manager and Hardcoded Defaults
+├── data/                   # Persistent storage for user settings and states
 ├── detection/              # YOLO Person Detector and Face Detectors
 ├── posture/                # Posture Evaluation algorithms & Correction Engine
 ├── recognition/            # ArcFace Biometric Embeddings 
-├── templates/              # HTML Web Dashboard
+├── templates/              # HTML Web Dashboard and Configuration UI
 ├── tests/                  # Unit tests and script sandboxes
 ├── profiles_cache.json     # Saved biometric embeddings
 └── pyproject.toml          # Python dependencies
@@ -67,7 +69,8 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
    *(Alternatively, run `uv run deskbot_v3.py` to auto-bootstrap).*
 
 ## Environment Configuration
-The application relies heavily on defaults specified in `config/settings.py`. There are no hard `.env` requirements, but the following configurations are dynamically evaluated:
+The application separates hardcoded defaults from user preferences.
+- **Settings:** Defaults are stored in `config/defaults.py`. User overrides are managed by `SettingsManager` and saved persistently to `data/settings.json`. You can modify settings live via the web Configuration Page without restarting the server.
 - **Models:** Models are automatically downloaded by `core/model_manager.py` to the `models/` directory on first boot based on `models_manifest.json`.
 - **Database:** Creates `analytics/telemetry.db` automatically in the local path.
 - **Hardware:** Automatically attempts to hook `DmlExecutionProvider` (DirectML) for ONNX and PyTorch if available, gracefully falling back to CPU.
@@ -88,7 +91,10 @@ python -m unittest discover tests
 ## API Documentation
 The local Flask server exposes several endpoints for dashboard interaction:
 - `GET /` - Renders the main dashboard.
+- `GET /config` - Renders the Configuration settings page.
 - `GET /api/metrics_slice` - Returns live telemetry JSON for all active tracking sessions.
+- `GET /api/settings` - Returns the current resolved configuration payload.
+- `POST /api/settings` - Accepts partial JSON config, saves to disk, and hot-reloads the backend.
 - `POST /api/profile/register` - Registers the currently tracked user to a named biometric profile.
 - `POST /api/profile/recalibrate` - Drops the current posture baseline and forces the active identity back into the Calibration state.
 - `POST /api/profile/delete` - Deletes a user's biometric profile and clears their telemetry history.
