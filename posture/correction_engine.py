@@ -9,7 +9,7 @@ class CorrectionEngine:
         """
         Calculates severity and assigns the proper alert string.
         """
-        from config.settings import settings
+        from config.settings_manager import settings
 
         torso_ratio = getattr(person, "smoothed_ratio", 0.5)
         baseline_ratio = getattr(session, "posture_baseline", 0.5)

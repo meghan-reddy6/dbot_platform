@@ -194,3 +194,57 @@ def video_feed():
         video_stream_generator(func),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
+
+@api_bp.route("/config")
+def configuration_page():
+    return render_template("configuration.html")
+
+@api_bp.route("/api/settings", methods=["GET", "POST"])
+def manage_settings():
+    from config.settings_manager import settings
+    if request.method == "POST":
+        payload = request.get_json()
+        settings.update(payload)
+        return jsonify({"status": "success", "settings": settings.get_all()})
+    return jsonify(settings.get_all())
+
+@api_bp.route("/api/settings/reset", methods=["POST"])
+def reset_settings_section():
+    from config.settings_manager import settings
+    payload = request.get_json()
+    keys = payload.get("keys", [])
+    if not keys and payload.get("restore_all"):
+        settings.restore_defaults()
+    else:
+        settings.reset_section(keys)
+    return jsonify({"status": "success", "settings": settings.get_all()})
+
+@api_bp.route("/api/settings/export", methods=["GET"])
+def export_settings():
+    from config.settings_manager import settings
+    import json
+    settings_json = json.dumps(settings.get_all(), indent=4)
+    return Response(
+        settings_json,
+        mimetype="application/json",
+        headers={"Content-disposition": "attachment; filename=deskbot_settings.json"}
+    )
+
+@api_bp.route("/api/settings/import", methods=["POST"])
+def import_settings():
+    from config.settings_manager import settings
+    import json
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+    
+    try:
+        content = file.read().decode('utf-8')
+        payload = json.loads(content)
+        settings.update(payload)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+

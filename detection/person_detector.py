@@ -113,7 +113,7 @@ class PersonDetector:
                     eye_width = roi_size * 2
                     eye_center_x = roi_size
                     gaze_x = (cx - eye_center_x) / (eye_width / 2.0)
-                    is_looking_away = abs(gaze_x) > 0.22
+                    is_looking_away = abs(gaze_x) > 0.75
                     return gaze_x, is_looking_away
             return 0.0, False
         except Exception:

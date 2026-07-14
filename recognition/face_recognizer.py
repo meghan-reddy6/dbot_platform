@@ -4,7 +4,7 @@ import numpy as np
 import onnxruntime as ort
 import logging
 from typing import Optional
-from config.settings import settings
+from config.settings_manager import settings
 
 logger = logging.getLogger(__name__)
 

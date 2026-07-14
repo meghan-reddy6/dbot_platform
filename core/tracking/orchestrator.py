@@ -2,7 +2,7 @@ import logging
 import time
 import threading
 import numpy as np
-from config.settings import settings
+from config.settings_manager import settings
 import multiprocessing
 from typing import Any, Optional, Tuple
 from detection.person_detector import PersonDetector
@@ -121,7 +121,7 @@ class TrackerEngine:
         self.result_queue = multiprocessing.Queue()
         self.bg_process = multiprocessing.Process(
             target=bg_biometric_process_worker,
-            args=(self.job_queue, self.result_queue, self.profiles, settings),
+            args=(self.job_queue, self.result_queue, self.profiles, settings.get_all()),
             daemon=True,
         )
         self.bg_process.start()
@@ -620,7 +620,7 @@ class TrackerEngine:
         Executes multi-object tracking and health evaluations on each incoming frame.
         """
         import numpy as np
-        from config.settings import settings
+        from config.settings_manager import settings
         import queue as python_queue
 
         best_guest = None
@@ -903,7 +903,7 @@ class TrackerEngine:
                                                     self.job_queue,
                                                     self.result_queue,
                                                     self.profiles,
-                                                    settings,
+                                                    settings.get_all(),
                                                 ),
                                                 daemon=True,
                                             )
