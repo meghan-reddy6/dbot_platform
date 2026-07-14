@@ -55,18 +55,29 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
 
 ## Prerequisites
 - Python 3.12 or higher.
-- `uv` (Fast Python package installer).
 - A connected USB Webcam or integrated laptop camera.
+- (Optional) `uv` for fast package installation.
 - (Optional) Windows machine with DirectX 12 compatible GPU for DirectML acceleration.
 
 ## Installation
+
+### Option 1: Using `uv` (Recommended)
 1. Clone the repository and navigate to the root directory.
-2. Install dependencies using `uv`:
+2. Install dependencies:
    ```bash
    uv venv
    uv pip install -e .
    ```
    *(Alternatively, run `uv run deskbot_v3.py` to auto-bootstrap).*
+
+### Option 2: Using standard `pip`
+1. Clone the repository and navigate to the root directory.
+2. Create a virtual environment and install dependencies:
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
 
 ## Environment Configuration
 The application separates hardcoded defaults from user preferences.
@@ -79,6 +90,8 @@ The application separates hardcoded defaults from user preferences.
 To start the full pipeline (Inference Engine + Flask Server):
 ```bash
 uv run deskbot_v3.py
+# OR if using standard pip:
+# python deskbot_v3.py
 ```
 Once initialized, the terminal will display: `Server pipeline active at: http://localhost:5000`. Navigate to this URL in your browser to view the live dashboard and register your biometric profile.
 
