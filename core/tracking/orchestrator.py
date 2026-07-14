@@ -561,6 +561,8 @@ class TrackerEngine:
                 if session.standing_duration_clock >= getattr(person, "stand_requirement", 120):
                     session.sitting_duration_clock = 0.0
                     session.session_limit_announced = False
+                    if "Session Limit Reached" in getattr(session, "health_status", ""):
+                        session.health_status = "Healthy"
                 if is_standing and hasattr(session, "baseline_shoulder_y") and session.baseline_shoulder_y is not None:
                     session.baseline_shoulder_y = (session.baseline_shoulder_y * 0.95) + (
                         shoulder_center_y * 0.05
@@ -729,7 +731,7 @@ class TrackerEngine:
                             # Biometrics Telemetry Logging
                             box_w = p.box[2] - p.box[0]
                             box_h = p.box[3] - p.box[1]
-                            logger.info(f"[BIOMETRICS] Track={p.track_id} | Box={box_w:.1f}x{box_h:.1f} | Top={matched_db_profile_string} ({sim:.3f}) | Margin={margin:.3f} | Result={candidate_name}")
+                            logger.debug(f"[BIOMETRICS] Track={p.track_id} | Box={box_w:.1f}x{box_h:.1f} | Top={matched_db_profile_string} ({sim:.3f}) | Margin={margin:.3f} | Result={candidate_name}")
 
                         current_area = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
                         min_primary_area = (
@@ -1281,9 +1283,10 @@ class TrackerEngine:
                 person.target_next_state = None
                 person.frames_in_current_state = 0
 
-            if person.state != getattr(person, "last_logged_state", None):
-                logger.info(f"[STATE CHANGE] Track {person.track_id} -> {person.state}")
-                person.last_logged_state = person.state
+            # Print state changes (suppressed to debug to prevent log spam during rapid state transitions)
+            if getattr(person, "_last_printed_state", None) != person.state:
+                logger.debug(f"[STATE CHANGE] Track {person.track_id} -> {person.state}")
+                person._last_printed_state = person.state
                 person.last_state = person.state
 
         for k in keys_to_delete:

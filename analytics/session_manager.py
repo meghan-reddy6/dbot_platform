@@ -17,12 +17,22 @@ class SessionManager:
         """
         snapshot = []
         is_db_empty = len(health_evaluator.profiles) == 0
+        seen_names = set()
+        
+        primary_track_id = getattr(health_evaluator, "primary_user_track_id", None)
+        persons_list = list(health_evaluator.tracked_persons.values())
+        persons_list.sort(key=lambda p: 0 if p.track_id == primary_track_id else 1)
 
-        for tracked_person in list(health_evaluator.tracked_persons.values()):
-            is_primary = (tracked_person.track_id == getattr(health_evaluator, "primary_user_track_id", None))
+        for tracked_person in persons_list:
+            if tracked_person.name in seen_names and not tracked_person.name.startswith("Unknown"):
+                continue
+
+            is_primary = (tracked_person.track_id == primary_track_id)
             has_active_session = tracked_person.name in health_evaluator.active_sessions and not tracked_person.name.startswith("Unknown")
 
             if is_db_empty or is_primary or has_active_session:
+                if not tracked_person.name.startswith("Unknown"):
+                    seen_names.add(tracked_person.name)
                 # Calculate unified state string for the frontend HTML dashboard
                 dashboard_state = tracked_person.state
                 health = getattr(tracked_person, "health_status", "Healthy")

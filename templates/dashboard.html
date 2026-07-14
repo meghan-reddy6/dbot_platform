@@ -277,54 +277,103 @@
     </div>
 
     <script>
-        const SvgElements = {
-            chair: `<path d="M 30 65 L 70 65 L 70 95 M 30 65 L 30 35" fill="none" stroke-width="4" stroke-linecap="round" stroke="rgba(255,255,255,0.2)"/>`,
-            legsSitting: `<path d="M 50 65 L 75 65 L 75 95" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" class="svg-part svg-body"/>`,
-            legsStanding: `<path d="M 50 65 L 50 95 M 50 95 L 45 95 M 50 95 L 55 95" fill="none" stroke-width="8" stroke-linecap="round" class="svg-part"/>`,
-            torso: `<path d="M 50 35 L 50 65" fill="none" stroke-width="10" stroke-linecap="round" class="svg-part svg-torso svg-body"/>`,
-            head: `
-                <g class="svg-part svg-head svg-body">
-                    <circle cx="50" cy="20" r="12" class="svg-part"/>
-                    <g class="eyes-forward"><circle cx="45" cy="18" r="1.5" fill="#0f172a"/><circle cx="55" cy="18" r="1.5" fill="#0f172a"/></g>
-                    <g class="eyes-left" style="display:none;"><circle cx="42" cy="18" r="1.5" fill="#0f172a"/></g>
+        function buildDashboardDOM(trackId) {
+            // 1. Tracking: Sitting upright inside tracking brackets
+            const trackingSVG = `
+                <g class="svg-part svg-body">
+                    <circle cx="50" cy="25" r="8" fill="none" stroke-width="5" class="svg-part svg-head"/>
+                    <path d="M50 33 L50 65" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part svg-torso"/>
+                    <path d="M50 65 L65 65 L65 95" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
+                    <path d="M50 45 L60 55 L70 55" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
                 </g>
-            `,
-            calibScan: `<circle cx="50" cy="20" r="22" fill="none" stroke-width="2" class="svg-part svg-overlay overlay-calib anim-rotate-scan" stroke-dasharray="20 10"/>`,
-            scanLine: `<line x1="20" y1="50" x2="80" y2="50" stroke-width="2" class="svg-part svg-overlay overlay-scanline anim-scan-y"/>`,
-            warningBadge: `<g class="svg-part svg-overlay overlay-warning" transform="translate(85, 25)"><circle cx="0" cy="0" r="8"/><line x1="0" y1="-4" x2="0" y2="2" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="0" cy="5" r="1" fill="#fff"/></g>`,
-            eye: `<g class="svg-part svg-overlay overlay-eye" transform="translate(80, 20)"><path d="M-8 0 Q0 -8 8 0 Q0 8 -8 0" fill="none" stroke-width="2"/><circle cx="0" cy="0" r="3"/></g>`,
-            stopwatch: `
+                <path d="M30 15 L20 15 L20 25 M70 15 L80 15 L80 25 M30 95 L20 95 L20 85 M70 95 L80 95 L80 85" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2" class="svg-part svg-overlay overlay-calib anim-pulse-gentle"/>
+                <line x1="15" y1="50" x2="85" y2="50" stroke="rgba(56, 189, 248, 0.5)" stroke-width="2" class="svg-part svg-overlay overlay-scanline anim-scan-y"/>
+            `;
+
+            // 2. Healthy (Posture): Perfect ergonomic posture with checkmark
+            const postureSVG = `
+                <g class="svg-part svg-body">
+                    <g class="svg-part svg-head"><circle cx="50" cy="20" r="9" fill="none" stroke-width="5"/></g>
+                    <path d="M50 29 L50 65" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part svg-torso"/>
+                    <path d="M50 65 L70 65 L70 95" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
+                    <path d="M50 40 L50 55 L65 55" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
+                </g>
+                <path d="M35 65 L35 95 L40 95 M35 65 L25 65 M25 65 L25 50" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="3" stroke-linecap="round"/>
+                <g class="svg-part svg-overlay overlay-check">
+                    <circle cx="75" cy="30" r="10" fill="#0f172a" stroke="none"/>
+                    <path d="M69 31 L73 35 L81 25" fill="none" stroke-width="3" stroke-linecap="round" stroke="#10b981"/>
+                </g>
+                <g class="svg-part svg-overlay overlay-warning" transform="translate(85, 25)">
+                    <circle cx="0" cy="0" r="10" fill="#0f172a" stroke="none"/>
+                    <line x1="0" y1="-5" x2="0" y2="2" stroke-width="3" stroke-linecap="round" stroke="#ef4444"/>
+                    <circle cx="0" cy="6" r="1.5" fill="#ef4444"/>
+                </g>
+            `;
+
+            // 3. Eyes Tracked: Facing monitor, gaze lines
+            const eyesSVG = `
+                <g class="svg-part svg-body">
+                    <g class="svg-part svg-head">
+                        <circle cx="45" cy="25" r="9" fill="none" stroke-width="5"/>
+                        <g class="eyes-forward"><circle cx="42" cy="23" r="1.5" fill="currentColor"/><circle cx="50" cy="23" r="1.5" fill="currentColor"/></g>
+                        <g class="eyes-left" style="display:none;"><circle cx="38" cy="23" r="1.5" fill="currentColor"/></g>
+                    </g>
+                    <path d="M45 34 L45 70" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part svg-torso"/>
+                    <path d="M45 70 L60 70 L60 95" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
+                </g>
+                <path d="M75 25 L75 60 L70 60 M75 60 L80 60" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3" stroke-linecap="round"/>
+                <path d="M53 23 L68 23 M53 29 L68 29" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3" class="svg-part svg-overlay overlay-eye anim-breathe"/>
+            `;
+
+            // 4. Sitting: Side view, 90 deg angles, stopwatch
+            const sittingSVG = `
+                <g class="svg-part svg-body">
+                    <circle cx="45" cy="25" r="8" fill="none" stroke-width="5" class="svg-part svg-head"/>
+                    <path d="M45 33 L45 65" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part svg-torso"/>
+                    <path d="M45 65 L70 65 L70 95" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="svg-part"/>
+                </g>
+                <path d="M30 65 L30 95 L35 95 M30 65 L20 65 M20 65 L20 40" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="3" stroke-linecap="round"/>
                 <g class="svg-part svg-overlay overlay-stopwatch" transform="translate(80, 25)">
-                    <circle cx="0" cy="0" r="12" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+                    <circle cx="0" cy="0" r="12" fill="#0f172a" stroke-width="3"/>
                     <circle cx="0" cy="0" r="12" fill="none" stroke-width="3" stroke-dasharray="75.39" stroke-dashoffset="var(--timer-offset, 75.39)" transform="rotate(-90)"/>
                     <line x1="0" y1="0" x2="0" y2="-8" stroke-width="2"/>
-                    <line x1="0" y1="-14" x2="0" y2="-17" stroke-width="3"/>
-                </g>`,
-            upArrow: `<path d="M85 40 L85 20 M75 30 L85 20 L95 30" fill="none" stroke-width="4" stroke-linecap="round" class="svg-part svg-overlay overlay-uparrow anim-float"/>`,
-            progressRing: `
-                <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="4" class="svg-part svg-overlay overlay-ring"/>
-                <circle cx="50" cy="50" r="40" fill="none" stroke-width="4" stroke-dasharray="251.32" stroke-dashoffset="var(--stand-offset, 251.32)" transform="rotate(-90 50 50)" class="svg-part svg-overlay overlay-ring"/>
-            `,
-            check: `<path d="M65 35 L75 45 L90 25" fill="none" stroke-width="4" stroke-linecap="round" class="svg-part svg-overlay overlay-check"/>`,
-            sparkles: `<path d="M80 15 L82 20 L87 22 L82 24 L80 29 L78 24 L73 22 L78 20 Z" class="svg-part svg-overlay overlay-sparkle anim-sparkle"/>`
-        };
+                    <line x1="-3" y1="-15" x2="3" y2="-15" stroke-width="3"/>
+                </g>
+                <path d="M85 55 L85 40 M78 47 L85 40 L92 47" fill="none" stroke-width="3" stroke-linecap="round" class="svg-part svg-overlay overlay-uparrow anim-float"/>
+            `;
 
-        function buildDashboardDOM(trackId) {
+            // 5. Movement: Standing/stepping, motion lines
+            const movementSVG = `
+                <g class="svg-part svg-body">
+                    <circle cx="50" cy="25" r="8" fill="none" stroke-width="5" class="svg-part svg-head"/>
+                    <path d="M50 33 L50 65" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part svg-torso"/>
+                    <path d="M50 65 L40 95 M50 65 L60 95" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part"/>
+                    <path d="M50 45 L35 55 M50 45 L65 55" fill="none" stroke-width="5" stroke-linecap="round" class="svg-part"/>
+                </g>
+                <path d="M25 35 Q15 45 25 55 M15 40 Q5 50 15 60" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3" stroke-linecap="round" class="svg-part anim-float"/>
+                <g class="svg-part svg-overlay overlay-ring">
+                    <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                    <circle cx="50" cy="50" r="40" fill="none" stroke-width="3" stroke-dasharray="251.32" stroke-dashoffset="var(--stand-offset, 251.32)" transform="rotate(-90 50 50)"/>
+                </g>
+                <path d="M85 40 L85 20 M75 30 L85 20 L95 30" fill="none" stroke-width="3" stroke-linecap="round" class="svg-part svg-overlay overlay-uparrow anim-float"/>
+                <path d="M65 35 L75 45 L90 25" fill="none" stroke-width="4" stroke-linecap="round" class="svg-part svg-overlay overlay-check"/>
+                <path d="M80 15 L82 20 L87 22 L82 24 L80 29 L78 24 L73 22 L78 20 Z" class="svg-part svg-overlay overlay-sparkle anim-sparkle"/>
+            `;
+
             const boxes = [
-                { id: 'tracking', label: 'Tracking', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.calibScan + SvgElements.scanLine },
-                { id: 'posture', label: 'Posture', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.warningBadge },
-                { id: 'eyes', label: 'Eyes', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.eye },
-                { id: 'sitting', label: 'Sitting', base: SvgElements.chair + SvgElements.legsSitting + SvgElements.torso + SvgElements.head, overlays: SvgElements.stopwatch + SvgElements.upArrow },
-                { id: 'movement', label: 'Movement', base: SvgElements.legsStanding + SvgElements.torso + SvgElements.head, overlays: SvgElements.progressRing + SvgElements.upArrow + SvgElements.check + SvgElements.sparkles }
+                { id: 'tracking', label: 'Tracking', inner: trackingSVG },
+                { id: 'posture', label: 'Posture', inner: postureSVG },
+                { id: 'eyes', label: 'Eyes', inner: eyesSVG },
+                { id: 'sitting', label: 'Sitting', inner: sittingSVG },
+                { id: 'movement', label: 'Movement', inner: movementSVG }
             ];
 
             let html = `<div class="dashboard-matrix" style="display: flex; flex-wrap: nowrap; gap: 16px; justify-content: center; width: 100%;">`;
             boxes.forEach(b => {
                 html += `
                     <div id="box-${trackId}-${b.id}" class="telltale-box" style="width: 100px; height: 120px;">
-                        <svg viewBox="0 0 100 100" style="width: 70px; height: 70px;">
-                            ${b.base}
-                            ${b.overlays}
+                        <svg viewBox="0 0 100 100" style="width: 70px; height: 70px; overflow: visible;">
+                            ${b.inner}
                         </svg>
                         <div id="label-${trackId}-${b.id}" style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; text-align: center; margin-top: 8px; line-height: 1.2; transition: color 0.4s ease;">
                             ${b.label}
