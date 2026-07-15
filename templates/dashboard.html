@@ -219,6 +219,7 @@
 .eyes-ocular_break .eyes-forward { display: none; }
 .eyes-ocular_break .eyes-left { display: block; opacity: 1; }
 .eyes-ocular_break .overlay-eye { opacity: 1; }
+.eyes-ocular_break .overlay-warning { opacity: 1; }
 .eyes-normal .eyes-left { display: none; }
 
 /* Sitting State Logic */
@@ -290,6 +291,9 @@
                 <button onclick="triggerManualRecalibrate()" style="background: linear-gradient(135deg, #3b82f6, #06b6d4); color: white; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-left: 10px; box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
                     🔄 Recalibrate Posture
                 </button>
+                <button onclick="triggerSessionRestart()" style="background: linear-gradient(135deg, #8b5cf6, #d946ef); color: white; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-left: 10px; box-shadow: 0 0 12px rgba(217, 70, 239, 0.2);" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+                    ▶️ Start New Session
+                </button>
             </div>
             <div id="profiles-container"></div>
         </div>
@@ -342,6 +346,11 @@
                 </g>
                 <path d="M75 25 L75 60 L70 60 M75 60 L80 60" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3" stroke-linecap="round"/>
                 <path d="M53 23 L68 23 M53 29 L68 29" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3" class="svg-part svg-overlay overlay-eye anim-breathe"/>
+                <g class="svg-part svg-overlay overlay-warning" transform="translate(85, 25)">
+                    <circle cx="0" cy="0" r="10" fill="#0f172a" stroke="none"/>
+                    <line x1="0" y1="-5" x2="0" y2="2" stroke-width="3" stroke-linecap="round" stroke="#ef4444"/>
+                    <circle cx="0" cy="6" r="1.5" fill="#ef4444"/>
+                </g>
             `;
 
             // 4. Sitting: Side view, 90 deg angles, stopwatch
@@ -661,16 +670,16 @@ if (glow === 'red') label.style.color = '#ef4444';
                 
                 const container = document.getElementById('profiles-container');
                 let html = `<div style="overflow-x: auto; padding-bottom: 15px; width: 100%;">
-                    <table style="min-width: 1100px;">
+                    <table style="min-width: 1100px; width: 100%; border-collapse: collapse; text-align: left;">
                     <tr>
-                        <th>Name</th>
-                        <th>3D Posture Tolerance Edge</th>
-                        <th>Continuous Sitting Cap (Minutes)</th>
-                        <th>Required Stand Duration (Minutes)</th>
-                        <th>Screen Gaze Limit (Minutes)</th>
-                        <th>Ocular Break Duration (Minutes)</th>
-                        <th>History Export</th>
-                        <th>Actions</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Name</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">3D Posture Tolerance Edge</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Continuous Sitting Cap (Minutes)</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Required Stand Duration (Minutes)</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Screen Gaze Limit (Minutes)</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Ocular Break Duration (Minutes)</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">History Export</th>
+                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Actions</th>
                     </tr>`;
                 
                 Object.keys(profiles).forEach(username => {
@@ -681,17 +690,17 @@ if (glow === 'red') label.style.color = '#ef4444';
                     let breakDurationMin = Math.max(1, Math.round(p.ocular_break_duration / 60));
                     html += `
                         <tr>
-                            <td style="font-weight: 500;">${username}</td>
-                            <td><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${username}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
-                            <td><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
-                            <td><input type="range" min="1" max="15" step="1" value="${standReqMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, (this.value * 60), ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${standReqMin}m</span></td>
-                            <td><input type="range" min="1" max="120" step="1" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
-                            <td><input type="range" min="1" max="15" step="1" value="${breakDurationMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, (this.value * 60))"> <span>${breakDurationMin}m</span></td>
-                            <td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); font-weight: 500;">${username}</td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${username}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="15" step="1" value="${standReqMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, (this.value * 60), ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${standReqMin}m</span></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="120" step="1" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="15" step="1" value="${breakDurationMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, (this.value * 60))"> <span>${breakDurationMin}m</span></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);">
                                 <a href="/api/export/csv/${username}" target="_blank" style="color: #10b981; text-decoration: none; font-size: 0.85rem; margin-right: 8px;">CSV</a>
                                 <a href="/api/export/json/${username}" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.85rem;">JSON</a>
                             </td>
-                            <td><button class="danger" onclick="deleteProfile('${username}')">Delete Profile</button></td>
+                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><button class="danger" onclick="deleteProfile('${username}')">Delete Profile</button></td>
                         </tr>
                     `;
                 });
@@ -702,13 +711,19 @@ if (glow === 'red') label.style.color = '#ef4444';
             }
         }
 
-        async function triggerManualRecalibrate() {
+        function triggerManualRecalibrate() {
             try {
-                const res = await fetch('/api/profile/recalibrate', { method: 'POST' });
-                const data = await res.json();
-                console.log(data.message);
+                fetch('/api/profile/recalibrate', { method: 'POST' });
             } catch (e) {
                 console.error("Recalibration trigger failed", e);
+            }
+        }
+        
+        function triggerSessionRestart() {
+            try {
+                fetch('/api/profile/restart_session', { method: 'POST' });
+            } catch (e) {
+                console.error("Session restart failed", e);
             }
         }
 

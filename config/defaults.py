@@ -29,7 +29,8 @@ DEFAULT_SETTINGS = {
     
     # Eye Tracking Settings
     "enable_eye_tracking": True,
-    "screen_gaze_limit_seconds": 600,
+    "screen_gaze_limit_seconds": 1200,
+    "ocular_break_duration_seconds": 20,
     "eye_tracking_sensitivity": "Medium", # Low, Medium, High
     
     # Sitting & Movement

@@ -2,6 +2,7 @@ import threading
 import time
 import numpy as np
 from collections import deque
+from config.settings_manager import settings
 
 state_mutex = threading.Lock()
 
@@ -84,12 +85,12 @@ class Person:
         self.is_looking_away = False
         self.health_status = "Healthy" # local frame copy for logging
 
-        self.slouch_sensitivity = 15.0
-        self.session_limit = 2400
-        self.stand_requirement = 120
-        self.gaze_away_limit = 20.0
-        self.screen_gaze_limit = 1200.0
-        self.biometric_cutoff = 0.55
+        self.slouch_sensitivity = 15.0  # Kept local for dynamic adjustment, overwritten by sync_profiles
+        self.session_limit = settings.get("session_limit_seconds", 1200)
+        self.stand_requirement = settings.get("stand_requirement_seconds", 180)
+        self.gaze_away_limit = settings.get("ocular_break_duration_seconds", 20.0)
+        self.screen_gaze_limit = settings.get("screen_gaze_limit_seconds", 1200.0)
+        self.biometric_cutoff = settings.get("recognition_threshold_initial", 0.35)
         self.last_analytics_flush_time = 0.0
 
         self.baseline_torso_ratio = 0.0

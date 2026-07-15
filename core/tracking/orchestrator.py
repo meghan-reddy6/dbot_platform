@@ -825,6 +825,16 @@ class TrackerEngine:
                                 p.verified_name = p.candidate_name
                                 p.frame_val_name = p.candidate_name
                                 
+                                # Apply personalized limits upon recognition
+                                if p.name in self.profiles:
+                                    profile_config = self.profiles[p.name]
+                                    p.slouch_sensitivity = profile_config.get("slouch_sensitivity", 15.0)
+                                    p.session_limit = profile_config.get("session_limit", 1200)
+                                    p.stand_requirement = profile_config.get("stand_requirement", 180)
+                                    p.gaze_away_limit = float(profile_config.get("ocular_break_duration", 20.0))
+                                    p.screen_gaze_limit = float(profile_config.get("screen_gaze_limit", 1200.0))
+                                    p.biometric_cutoff = profile_config.get("biometric_cutoff", 0.35)
+                                
                                 # Load calibration from session
                                 if session.is_posture_calibrated:
                                     logger.info(f"[CALIBRATION DECISION] IDENTITY_ALREADY_CALIBRATED. Bypassing recalibration.")
@@ -975,6 +985,22 @@ class TrackerEngine:
                         session.calibrated_baseline_neck_pitch = 0.0
                         if hasattr(session, 'baseline_shoulder_y'):
                             del session.baseline_shoulder_y
+                            
+            if getattr(self, "manual_session_restart_requested", False):
+                self.manual_session_restart_requested = False
+                if self.primary_user_track_id in self.tracked_persons:
+                    person = self.tracked_persons[self.primary_user_track_id]
+                    session = self.active_sessions.get(person.name)
+                    if session:
+                        logger.info(f"[SESSION RESTART] Restarting session timers for {person.name}")
+                        session.sitting_duration_clock = 0.0
+                        session.standing_duration_clock = 0.0
+                        session.slouch_timer = 0.0
+                        session.screen_gaze_accumulation_timer = 0.0
+                        session.ocular_break_timer = 0.0
+                        session.session_limit_announced = False
+                        session.health_status = "Healthy"
+                        session.first_seen_time = time.time()
 
         # ---------------------------------------------------------
         # 2. DETECTION & SPATIAL ASSIGNMENT (FAST PATH)

@@ -108,13 +108,18 @@ def delete_profile_endpoint():
 def trigger_manual_recalibration():
     """Triggers an explicit manual recalibration of the primary anchor."""
     health_evaluator = current_app.config["HEALTH_EVALUATOR"]
-    health_evaluator.trigger_recalibration = True
-    return jsonify(
-        {
-            "status": "success",
-            "message": "Manual recalibration cycle triggered successfully.",
-        }
-    )
+    with state_mutex:
+        health_evaluator.manual_recalibration_requested = True
+    return jsonify({"message": "Recalibration flagged in background loop."})
+
+
+@api_bp.route("/api/profile/restart_session", methods=["POST"])
+def trigger_manual_session_restart():
+    """Restarts the active tracking session timers."""
+    health_evaluator = current_app.config["HEALTH_EVALUATOR"]
+    with state_mutex:
+        health_evaluator.manual_session_restart_requested = True
+    return jsonify({"message": "Session restart flagged in background loop."})
 
 
 @api_bp.route("/api/history/<user_name>")

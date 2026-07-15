@@ -1,6 +1,7 @@
 import sqlite3
 import numpy as np
 import os
+from config.settings_manager import settings
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "wellness_logs.db")
 
@@ -87,13 +88,19 @@ class DatabaseManager:
         self,
         user_name,
         face_embedding,
-        session_limit=1200,
+        session_limit=None,
         slouch_sensitivity=15.0,
-        biometric_cutoff=0.35,
-        stand_requirement=180,
-        ocular_break_duration=20,
-        screen_gaze_limit=1200,
+        biometric_cutoff=None,
+        stand_requirement=None,
+        ocular_break_duration=None,
+        screen_gaze_limit=None,
     ):
+        session_limit = session_limit if session_limit is not None else settings.get("session_limit_seconds", 1200)
+        biometric_cutoff = biometric_cutoff if biometric_cutoff is not None else settings.get("recognition_threshold_initial", 0.35)
+        stand_requirement = stand_requirement if stand_requirement is not None else settings.get("stand_requirement_seconds", 180)
+        ocular_break_duration = ocular_break_duration if ocular_break_duration is not None else settings.get("ocular_break_duration_seconds", 20)
+        screen_gaze_limit = screen_gaze_limit if screen_gaze_limit is not None else settings.get("screen_gaze_limit_seconds", 1200)
+        
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
