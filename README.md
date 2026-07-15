@@ -161,4 +161,5 @@ The local Flask server exposes several endpoints for dashboard interaction:
 When contributing, ensure all heavy ML execution is restricted to the `TrackerEngine` thread. Do not introduce blocking calls to the main tracking loop.
 
 ## License
-Proprietary / Thundersoft Internal.
+Proprietary / Sapphire Stream Technology Private Limited Internal.
+
