@@ -12,7 +12,7 @@ The primary goal of DeskBot V3 is to promote healthy ergonomic habits for desk w
 - **Automatic Audio Alerts:** Queued, thread-safe text-to-speech (TTS) engine that issues corrective audio prompts (e.g., "Lift your head", "Avoid leaning forward").
 - **Live Web Dashboard & Configuration:** Local Flask-based dashboard offering real-time telemetry, session metrics, a live-annotated camera feed, and a hot-reloading settings interface.
 - **Persistent JSON Configuration:** Allows users to override system defaults via a clean UI, saving preferences locally to `data/settings.json` without requiring restarts.
-- **Hardware Acceleration:** Native Windows DirectML and ONNX Runtime support for highly efficient local Edge AI inference.
+- **Universal Hardware Acceleration:** Dynamically scales across Windows GPUs (DirectML), NVIDIA GPUs (CUDA), Edge NPUs (Qualcomm QNN on Rubik Pi), and Apple Silicon (Accelerate/CPU) using a universal ONNX fallback pipeline.
 
 ## Tech Stack
 - **Language:** Python 3.12+
@@ -54,10 +54,10 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
    The `TrackerEngine` runs the heavy ML inference loop on a dedicated daemon thread. The Flask server runs on the main thread to serve the dashboard. The `AlertManager` runs on a third isolated thread using a FIFO `Queue` to prevent blocking the ML loop during audio playback.
 
 ## Prerequisites
-- Python 3.12 or higher.
+- Python 3.10 or higher.
 - A connected USB Webcam or integrated laptop camera.
-- (Optional) `uv` for fast package installation.
-- (Optional) Windows machine with DirectX 12 compatible GPU for DirectML acceleration.
+- (Optional) `uv` for lightning-fast package installation.
+- (Optional) A dedicated GPU (NVIDIA, AMD) or NPU (like the Rubik Pi's Qualcomm chip) for hardware acceleration. The system gracefully falls back to the CPU if no accelerator is found.
 
 ## Installation
 
@@ -65,26 +65,36 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
 1. Clone the repository and navigate to the root directory.
 2. Install dependencies:
    ```bash
-   uv venv
-   uv pip install -e .
+   uv sync
    ```
-   *(Alternatively, run `uv run deskbot_v3.py` to auto-bootstrap).*
+   *(Alternatively, just run `uv run deskbot_v3.py` to auto-bootstrap).*
 
-### Option 2: Using standard `pip`
+### Option 2: Using standard `pip` (Mac, Ubuntu, Windows, Rubik Pi)
+Our dependency files use intelligent environment markers, meaning you can run this exact command on any OS (Windows, Mac, Linux) and `pip` will automatically ignore incompatible packages:
 1. Clone the repository and navigate to the root directory.
 2. Create a virtual environment and install dependencies:
    ```bash
    python -m venv venv
+   # On Windows:
    .\venv\Scripts\activate
+   # On Mac/Ubuntu/Linux/Rubik Pi:
+   source venv/bin/activate
+   
    pip install -r requirements.txt
    ```
+
+### Optional Hardware Acceleration (NVIDIA / Edge NPUs)
+Because DeskBot uses a **Universal Fallback Architecture**, you can manually install the specific ONNX Runtime library for your hardware to unlock extreme performance:
+- **NVIDIA GPU (Windows/Ubuntu):** Run `pip install onnxruntime-gpu`
+- **Rubik Pi (Qualcomm NPU):** Run `pip install onnxruntime-qnn`
+- **AMD/Intel GPU (Windows):** *No action required! `onnxruntime-directml` installs automatically on Windows.*
 
 ## Environment Configuration
 The application separates hardcoded defaults from user preferences.
 - **Settings:** Defaults are stored in `config/defaults.py`. User overrides are managed by `SettingsManager` and saved persistently to `data/settings.json`. You can modify settings live via the web Configuration Page without restarting the server.
 - **Models:** Models are automatically downloaded by `core/model_manager.py` to the `models/` directory on first boot based on `models_manifest.json`.
 - **Database:** Creates `analytics/telemetry.db` automatically in the local path.
-- **Hardware:** Automatically attempts to hook `DmlExecutionProvider` (DirectML) for ONNX and PyTorch if available, gracefully falling back to CPU.
+- **Hardware:** Features a Universal Fallback Pipeline. It automatically attempts to hook `QNNExecutionProvider` (NPU), `CUDAExecutionProvider` (NVIDIA), or `DmlExecutionProvider` (DirectML/AMD), gracefully cascading down to `CPUExecutionProvider` across all operating systems.
 
 ## Running the Project
 To start the full pipeline (Inference Engine + Flask Server):
