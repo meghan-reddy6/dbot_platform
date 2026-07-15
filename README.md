@@ -102,17 +102,6 @@ Because DeskBot uses a **Universal Fallback Architecture**, you can manually ins
 - **Rubik Pi (Qualcomm NPU):** Run `pip install onnxruntime-qnn`
 - **AMD/Intel GPU (Windows):** *No action required! `onnxruntime-directml` installs automatically on Windows.*
 
-### Step 3: Required AI Models
-Because AI models are large, they are not tracked in Git. You **must** populate the `models/` directory before starting the application, otherwise it will exit with an error.
-
-1. **YOLOv8-Pose (ONNX):** You can auto-download and generate this model by running the following Python one-liner in your environment:
-   ```bash
-   python -c "from ultralytics import YOLO; YOLO('models/yolov8n-pose.pt').export(format='onnx')"
-   ```
-2. **Proprietary Facial Models:** You must manually place the following internal models into the `models/` directory:
-   - `mobilefacenet.onnx`
-   - `face_detector.onnx`
-   - `face_landmark_detector.onnx`
 
 ## Environment Configuration
 The application separates hardcoded defaults from user preferences.
