@@ -65,7 +65,9 @@ class ArcFaceEmbedder:
         self.session = None
         if model_path and os.path.exists(model_path):
             try:
-                self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+                from utils.hardware import HardwareDetector
+                providers = HardwareDetector.detect().get_ort_providers()
+                self.session = ort.InferenceSession(model_path, providers=providers)
                 self.input_name = self.session.get_inputs()[0].name
                 logger.info(f"ArcFaceEmbedder initialized with {model_path}")
             except Exception as e:
@@ -110,11 +112,22 @@ class FaceRecognizer:
         self.face_net = None
         self.landmark_net = None
 
-        providers = ['CPUExecutionProvider']
+        from utils.hardware import HardwareDetector
+        
+        providers = HardwareDetector.detect().get_ort_providers()
 
         if detector_path and os.path.exists(detector_path) and landmark_path and os.path.exists(landmark_path):
-            self.face_net = ort.InferenceSession(detector_path, providers=providers)
-            self.landmark_net = ort.InferenceSession(landmark_path, providers=providers)
+            try:
+                self.face_net = ort.InferenceSession(detector_path, providers=providers)
+            except Exception as e:
+                logger.warning(f"face_net hardware initialization failed (likely invalid ONNX graph): {e}. Falling back to CPU.")
+                self.face_net = ort.InferenceSession(detector_path, providers=['CPUExecutionProvider'])
+                
+            try:
+                self.landmark_net = ort.InferenceSession(landmark_path, providers=providers)
+            except Exception as e:
+                logger.warning(f"landmark_net hardware initialization failed: {e}. Falling back to CPU.")
+                self.landmark_net = ort.InferenceSession(landmark_path, providers=['CPUExecutionProvider'])
         else:
             logger.warning("Detector or Landmark models missing. Face Recognition degraded.")
             

@@ -16,6 +16,17 @@ class HardwareProfile:
     has_npu: bool
     total_ram_gb: float
 
+    def get_ort_providers(self) -> list:
+        providers = []
+        if self.has_npu:
+            providers.append('QNNExecutionProvider')
+            providers.append('NnapiExecutionProvider')
+        if self.has_gpu:
+            providers.append('CUDAExecutionProvider')
+            providers.append('DmlExecutionProvider') # DirectML for Windows GPUs
+        providers.append('CPUExecutionProvider')
+        return providers
+
 
 class HardwareDetector:
     """
@@ -25,10 +36,23 @@ class HardwareDetector:
 
     @staticmethod
     def _check_gpu() -> bool:
-        # Simple heuristic, assumes if CUDA/ROCm or standard GPU libs are present
-        return os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" or os.path.exists(
-            "/dev/nvidia0"
-        )
+        # Check for CUDA (NVIDIA)
+        if os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" or os.path.exists("/dev/nvidia0"):
+            return True
+        # Check for AMD/Intel GPUs on Windows via ONNX DirectML provider availability
+        try:
+            import onnxruntime as ort
+            providers = ort.get_available_providers()
+            if 'DmlExecutionProvider' in providers:
+                return True
+        except ImportError:
+            pass
+            
+        # Fallback to checking registry or OS specific indicators if needed
+        if platform.system() == "Windows":
+            return True # Windows almost always has a GPU (Intel/AMD/Nvidia) capable of DirectML
+            
+        return False
 
     @staticmethod
     def _check_npu() -> bool:

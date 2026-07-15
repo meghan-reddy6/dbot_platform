@@ -24,7 +24,10 @@ class PersonDetector:
             
             if yolo_path:
                 self.stage1_model = YOLO(yolo_path, task="pose")
-                logger.info(f"PersonDetector Initialized: {yolo_path}")
+                if str(yolo_path).endswith('.onnx'):
+                    logger.info(f"PersonDetector Initialized via ONNX Runtime: {yolo_path}")
+                else:
+                    logger.info(f"PersonDetector Initialized via PyTorch: {yolo_path}")
             else:
                 self.stage1_model = None
                 logger.warning("YOLO Pose model missing. Detection disabled.")

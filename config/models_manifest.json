@@ -1,10 +1,10 @@
 {
   "yolo_pose": {
-    "filename": "yolov8n-pose.pt",
+    "filename": "yolov8n-pose.onnx",
     "version": "8.0",
     "url": "",
-    "sha256": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
-    "framework": "pytorch",
+    "sha256": "",
+    "framework": "onnx",
     "required": true,
     "description": "Ultralytics YOLOv8 Nano Pose model for posture tracking."
   },
