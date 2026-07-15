@@ -59,6 +59,13 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
 - (Optional) `uv` for lightning-fast package installation.
 - (Optional) A dedicated GPU (NVIDIA, AMD) or NPU (like the Rubik Pi's Qualcomm chip) for hardware acceleration. The system gracefully falls back to the CPU if no accelerator is found.
 
+### Linux / Ubuntu / Rubik Pi Specific Dependencies
+If you are on Linux, you must install the following system-level libraries for OpenCV (camera) and PyTTSx3 (text-to-speech) to function:
+```bash
+sudo apt-get update
+sudo apt-get install libgl1-mesa-glx espeak ffmpeg
+```
+
 ## Installation
 
 ### Option 1: Using `uv` (Recommended)
@@ -88,6 +95,18 @@ Because DeskBot uses a **Universal Fallback Architecture**, you can manually ins
 - **NVIDIA GPU (Windows/Ubuntu):** Run `pip install onnxruntime-gpu`
 - **Rubik Pi (Qualcomm NPU):** Run `pip install onnxruntime-qnn`
 - **AMD/Intel GPU (Windows):** *No action required! `onnxruntime-directml` installs automatically on Windows.*
+
+### Step 3: Required AI Models
+Because AI models are large, they are not tracked in Git. You **must** populate the `models/` directory before starting the application, otherwise it will exit with an error.
+
+1. **YOLOv8-Pose (ONNX):** You can auto-download and generate this model by running the following Python one-liner in your environment:
+   ```bash
+   python -c "from ultralytics import YOLO; YOLO('models/yolov8n-pose.pt').export(format='onnx')"
+   ```
+2. **Proprietary Facial Models:** You must manually place the following internal models into the `models/` directory:
+   - `mobilefacenet.onnx`
+   - `face_detector.onnx`
+   - `face_landmark_detector.onnx`
 
 ## Environment Configuration
 The application separates hardcoded defaults from user preferences.
