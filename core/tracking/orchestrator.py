@@ -521,8 +521,12 @@ class TrackerEngine:
                         session.ocular_break_timer = 0.0
                         session.health_status = "Healthy"
                         session.ocular_break_announced = False
+            elif session.health_status == "Ocular Break Recommended":
+                session.health_status = "Healthy"
+                session.ocular_break_announced = False
+                session.ocular_break_timer = 0.0
 
-            if person.state == "Tracking Active":
+            if person.state != "Standing":
                 session.sitting_duration_clock += dt
                 if session.sitting_duration_clock >= getattr(person, "session_limit", 2400):
                     session.health_status = "Session Limit Reached - Stand Up!"
@@ -535,6 +539,9 @@ class TrackerEngine:
                             identity=person.name
                         )
                         session.session_limit_announced = True
+                elif session.health_status == "Session Limit Reached - Stand Up!":
+                    session.health_status = "Healthy"
+                    session.session_limit_announced = False
 
             if session.health_status == "Posture Deficit Alert":
                 if not session.slouch_announced:
