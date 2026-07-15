@@ -31,16 +31,22 @@ dbot/
 │   ├── tracking/           # MOT, Session State (UserSession, Person), and Geometry
 │   └── model_manager.py    # Downloads and validates ONNX/YOLO models
 ├── alerts/                 # Thread-safe TTS Audio Alert Manager
-├── analytics/              # SQLite Database and Dashboard Session Exporter
+├── analytics/              # Dashboard Session Exporter & Metrics
+├── api/                    # Flask API Endpoints
+├── camera/                 # VideoCapture and Frame Processing
 ├── config/                 # Settings Manager and Hardcoded Defaults
 ├── data/                   # Persistent storage for user settings and states
+├── database/               # SQLite Database schema and wrappers
 ├── detection/              # YOLO Person Detector and Face Detectors
+├── models/                 # AI Models (populated manually)
 ├── posture/                # Posture Evaluation algorithms & Correction Engine
 ├── recognition/            # ArcFace Biometric Embeddings 
 ├── templates/              # HTML Web Dashboard and Configuration UI
 ├── tests/                  # Unit tests and script sandboxes
+├── utils/                  # Universal Hardware Detector & Helpers
 ├── profiles_cache.json     # Saved biometric embeddings
-└── pyproject.toml          # Python dependencies
+├── requirements.txt        # PIP dependencies
+└── pyproject.toml          # UV dependencies
 ```
 
 ## Architecture
