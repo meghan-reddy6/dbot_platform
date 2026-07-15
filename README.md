@@ -117,7 +117,7 @@ uv run deskbot_v3.py
 # OR if using standard pip:
 # python deskbot_v3.py
 ```
-Once initialized, the terminal will display: `Server pipeline active at: http://localhost:5000`. Navigate to this URL in your browser to view the live dashboard and register your biometric profile.
+Once initialized, the terminal will display: `Server pipeline active at: http://localhost:5050`. Navigate to this URL in your browser to view the live dashboard and register your biometric profile.
 
 ## Testing
 Run unit tests for the posture analysis and correction engines using `unittest`:

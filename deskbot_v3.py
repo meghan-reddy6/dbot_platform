@@ -93,8 +93,8 @@ if __name__ == "__main__":
     try:
         camera_bridge.start()
         threading.Thread(target=master_inference_loop, daemon=True).start()
-        logger.info("Server pipeline active at: http://localhost:5000")
-        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+        logger.info("Server pipeline active at: http://localhost:5050")
+        app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
     except KeyboardInterrupt:
         print("\n[!] SIGINT received. Commencing clean resource teardown...")
     finally:
