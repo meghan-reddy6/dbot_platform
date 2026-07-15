@@ -3,7 +3,7 @@ name = "dbot"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "opencv-python>=4.7.0.72",
     "numpy>=1.23.0",

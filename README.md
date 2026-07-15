@@ -60,7 +60,7 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
    The `TrackerEngine` runs the heavy ML inference loop on a dedicated daemon thread. The Flask server runs on the main thread to serve the dashboard. The `AlertManager` runs on a third isolated thread using a FIFO `Queue` to prevent blocking the ML loop during audio playback.
 
 ## Prerequisites
-- Python 3.10 or higher.
+- Python 3.11 or higher.
 - A connected USB Webcam or integrated laptop camera.
 - (Optional) `uv` for lightning-fast package installation.
 - (Optional) A dedicated GPU (NVIDIA, AMD) or NPU (like the Rubik Pi's Qualcomm chip) for hardware acceleration. The system gracefully falls back to the CPU if no accelerator is found.
