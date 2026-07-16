@@ -1,1 +1,4 @@
-{}
+{
+    "screen_gaze_limit_seconds": 60,
+    "confidence_threshold": 80
+}

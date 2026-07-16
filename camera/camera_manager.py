@@ -34,7 +34,10 @@ class CameraManager:
         self._frames_captured = 0
         self._last_fps_time = time.time()
         
-    def discover_cameras(self):
+    def discover_cameras(self, force=False):
+        if self.available_cameras and not force:
+            return self.available_cameras
+            
         logger.info("Starting camera discovery...")
         self.available_cameras = []
         
@@ -140,6 +143,22 @@ class CameraManager:
                 
         return best_pipeline
 
+    def _apply_camera_props(self, target_cam):
+        if not self.cap or not self.cap.isOpened():
+            return
+        cam_config = settings.get("camera", {})
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        res = cam_config.get("resolution", [1280, 720])
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
+        
+        if target_cam.get("type") != "CSI" and self.os_type != "Darwin":
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.metrics["resolution"] = f"{w}x{h}"
+
     def start(self):
         self.running = True
         
@@ -150,7 +169,7 @@ class CameraManager:
         preferred = cam_config.get("preferred_camera", "")
         
         target_cam = None
-        if preferred:
+        if str(preferred) != "":
             target_cam = next((c for c in self.available_cameras if str(c["index"]) == str(preferred)), None)
             
         if not target_cam and self.available_cameras:
@@ -183,20 +202,7 @@ class CameraManager:
             self.metrics["active_backend"] = "Default"
             
         if self.cap and self.cap.isOpened():
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # Try setting resolution
-            res = cam_config.get("resolution", [1280, 720])
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
-            
-            # Enforce MJPG if possible on USB
-            if target_cam.get("type") != "CSI" and self.os_type != "Darwin":
-                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-                
-            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            self.metrics["resolution"] = f"{w}x{h}"
-            
+            self._apply_camera_props(target_cam)
             threading.Thread(target=self._capture_loop, daemon=True).start()
         else:
             logger.error("Failed to open camera even after profiling.")
@@ -240,7 +246,9 @@ class CameraManager:
             cached_pipe = cam_config.get(f"cached_pipeline_{idx}")
             if cached_pipe:
                 self.cap = cv2.VideoCapture(cached_pipe["init_arg"], cached_pipe["backend"])
-                if self.cap.isOpened(): return
+                if self.cap.isOpened(): 
+                    self._apply_camera_props(self.active_camera_info)
+                    return
         
         # 2. Try alternate backend (trigger benchmark)
         if self.active_camera_info:
@@ -248,7 +256,9 @@ class CameraManager:
             best = self._find_best_pipeline(idx)
             if best:
                 self.cap = cv2.VideoCapture(best["init_arg"], best["backend"])
-                if self.cap.isOpened(): return
+                if self.cap.isOpened(): 
+                    self._apply_camera_props(self.active_camera_info)
+                    return
                 
         # 3. Try alternate camera
         self.discover_cameras()
@@ -257,7 +267,10 @@ class CameraManager:
             best = self._find_best_pipeline(fallback["index"])
             if best:
                 self.cap = cv2.VideoCapture(best["init_arg"], best["backend"])
-                if self.cap.isOpened(): return
+                if self.cap.isOpened(): 
+                    self.active_camera_info = fallback
+                    self._apply_camera_props(fallback)
+                    return
 
     def get_frame(self):
         with self._frame_lock:
