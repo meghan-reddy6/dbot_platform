@@ -32,7 +32,7 @@ def get_latest_frame():
 
 def master_inference_loop():
     global latest_frame_buffer
-    while camera_bridge.running:
+    while True:
         frame = camera_bridge.get_frame()
         if frame is None:
             time.sleep(0.01)
