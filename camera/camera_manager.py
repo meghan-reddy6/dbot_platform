@@ -63,6 +63,11 @@ class CameraManager:
         else:
             # Windows/Mac basic probing
             for idx in range(5):
+                # Critical Fix: macOS AVFoundation will SegFault if we cv2.VideoCapture() a camera that is currently streaming on another thread.
+                if self.active_camera_info and self.active_camera_info["index"] == idx and self.cap and self.cap.isOpened():
+                    self.available_cameras.append(self.active_camera_info)
+                    continue
+                    
                 cap = cv2.VideoCapture(idx)
                 if cap.isOpened():
                     backend = cap.getBackendName()
