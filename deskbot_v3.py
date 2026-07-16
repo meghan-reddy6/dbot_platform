@@ -89,6 +89,7 @@ if __name__ == "__main__":
     app.config["DB_CONN"] = db_conn
     app.config["HEALTH_EVALUATOR"] = health_evaluator
     app.config["GET_LATEST_FRAME"] = get_latest_frame
+    app.config["CAMERA_BRIDGE"] = camera_bridge
 
     try:
         camera_bridge.start()

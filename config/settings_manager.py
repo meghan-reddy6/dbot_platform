@@ -34,7 +34,11 @@ class SettingsManager:
                 merged = DEFAULT_SETTINGS.copy()
                 for k, v in overrides.items():
                     if k in merged:
-                        merged[k] = v
+                        if isinstance(merged[k], dict) and isinstance(v, dict):
+                            merged[k] = merged[k].copy()
+                            merged[k].update(v)
+                        else:
+                            merged[k] = v
                         
                 self._current_settings = merged
             except Exception as e:
@@ -81,7 +85,10 @@ class SettingsManager:
         with self.lock:
             for k, v in new_settings.items():
                 if k in self._current_settings:
-                    self._current_settings[k] = v
+                    if isinstance(self._current_settings[k], dict) and isinstance(v, dict):
+                        self._current_settings[k].update(v)
+                    else:
+                        self._current_settings[k] = v
         self.save()
         
     def reset_section(self, keys: list[str]) -> None:

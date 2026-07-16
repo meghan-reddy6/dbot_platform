@@ -788,8 +788,25 @@ if (glow === 'red') label.style.color = '#ef4444';
                     <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
                         <span>Total Available RAM</span> <strong style="color: #fff;">${health.ram_gb.toFixed(2)} GB</strong>
                     </div>
-                    <div style="display: flex; justify-content: space-between;">
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
                         <span>Live Tracked Sessions</span> <strong style="color: #38bdf8;">${health.tracked_targets}</strong>
+                    </div>
+                    
+                    <div style="margin-top: 10px; font-weight: 600; color: #fff;">Camera Telemetry</div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Capture Thread FPS</span> <strong style="color: #10b981;">${health.camera_metrics?.fps_capture?.toFixed(1) || '0.0'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Resolution</span> <strong style="color: #fff;">${health.camera_metrics?.resolution || 'Unknown'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Active Backend</span> <strong style="color: #38bdf8;">${health.camera_metrics?.active_backend || 'None'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                        <span>Frame Drops</span> <strong style="color: ${health.camera_metrics?.drops > 0 ? '#ef4444' : '#10b981'};">${health.camera_metrics?.drops || 0}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>Reconnects</span> <strong style="color: ${health.camera_metrics?.reconnects > 0 ? '#f59e0b' : '#10b981'};">${health.camera_metrics?.reconnects || 0}</strong>
                     </div>
                 `;
                 document.getElementById('diagnostics-container').innerHTML = diagHtml;

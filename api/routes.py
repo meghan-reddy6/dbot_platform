@@ -160,6 +160,8 @@ def system_health():
     hardware = HardwareDetector.detect()
     health_evaluator = current_app.config.get("HEALTH_EVALUATOR", None)
     total_tracked = len(health_evaluator.tracked_persons) if health_evaluator else 0
+    camera_bridge = current_app.config.get("CAMERA_BRIDGE", None)
+    cam_metrics = camera_bridge.metrics if camera_bridge else {}
     return jsonify(
         {
             "status": "healthy",
@@ -171,8 +173,42 @@ def system_health():
             "ram_gb": hardware.total_ram_gb,
             "tracked_targets": total_tracked,
             "last_system_message": health_evaluator.last_system_message if hasattr(health_evaluator, "last_system_message") else "",
+            "camera_metrics": cam_metrics
         }
     )
+
+@api_bp.route("/api/cameras", methods=["GET"])
+def get_cameras():
+    camera_bridge = current_app.config.get("CAMERA_BRIDGE")
+    if not camera_bridge:
+        return jsonify({"error": "Camera subsystem not available"}), 500
+    
+    cameras = camera_bridge.discover_cameras()
+    return jsonify({
+        "available_cameras": cameras,
+        "active_index": camera_bridge.active_camera_info["index"] if camera_bridge.active_camera_info else None
+    })
+
+@api_bp.route("/api/cameras/select", methods=["POST"])
+def select_camera():
+    from config.settings_manager import settings
+    camera_bridge = current_app.config.get("CAMERA_BRIDGE")
+    if not camera_bridge:
+        return jsonify({"error": "Camera subsystem not available"}), 500
+        
+    data = request.get_json()
+    new_index = data.get("index")
+    if new_index is None:
+        return jsonify({"error": "Camera index required"}), 400
+        
+    settings.update({"camera": {"preferred_camera": new_index}})
+    
+    # Hot-swap the camera stream
+    camera_bridge.stop()
+    time.sleep(1.0) # Wait for thread to exit
+    camera_bridge.start()
+    
+    return jsonify({"message": f"Successfully switched to camera index {new_index}."})
 
 
 def video_stream_generator(get_frame_func):

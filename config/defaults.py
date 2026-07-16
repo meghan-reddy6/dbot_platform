@@ -49,4 +49,17 @@ DEFAULT_SETTINGS = {
     "tracking_stability": "Normal",
     "detection_fps": 30,
     "enable_pose_smoothing": True,
+    
+    # Camera Subsystem
+    "camera": {
+        "preferred_camera": "",
+        "backend": "auto",
+        "resolution": [1280, 720],
+        "fps": 30,
+        "buffer_size": 1,
+        "auto_detect": True,
+        "low_latency": True,
+        "drop_old_frames": True,
+        "hardware_acceleration": True
+    },
 }

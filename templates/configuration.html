@@ -96,6 +96,25 @@
                 
                 <form id="config-form">
                     
+                    <!-- Camera Subsystem -->
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h3>Camera Subsystem</h3>
+                        </div>
+                        <div class="control-group">
+                            <div class="control-label">
+                                <span>Active Camera</span>
+                            </div>
+                            <div style="display: flex; gap: 10px;">
+                                <select id="camera-select">
+                                    <option value="">Loading cameras...</option>
+                                </select>
+                                <button type="button" class="btn btn-primary" onclick="changeCamera()">Apply</button>
+                            </div>
+                            <div class="control-desc" id="camera-metadata">Detecting capabilities...</div>
+                        </div>
+                    </div>
+                    
                     <!-- Posture Thresholds -->
                     <div class="glass-card">
                         <div class="card-header">
@@ -454,7 +473,56 @@
             setTimeout(() => toast.classList.remove('show'), 3000);
         }
         
-        window.onload = loadSettings;
+        async function fetchCameras() {
+            try {
+                const res = await fetch('/api/cameras');
+                const data = await res.json();
+                const sel = document.getElementById('camera-select');
+                sel.innerHTML = '';
+                
+                if (data.available_cameras && data.available_cameras.length > 0) {
+                    data.available_cameras.forEach(cam => {
+                        const opt = document.createElement('option');
+                        opt.value = cam.index;
+                        opt.text = `[${cam.type}] ${cam.name}`;
+                        if (String(cam.index) === String(data.active_index)) {
+                            opt.selected = true;
+                            document.getElementById('camera-metadata').innerText = `Active | Path: ${cam.path}`;
+                        }
+                        sel.appendChild(opt);
+                    });
+                } else {
+                    sel.innerHTML = '<option value="">No cameras found</option>';
+                }
+            } catch(e) {
+                console.error("Failed to fetch cameras:", e);
+            }
+        }
+        
+        async function changeCamera() {
+            const sel = document.getElementById('camera-select');
+            const idx = sel.value;
+            if (idx === "") return;
+            
+            try {
+                const res = await fetch('/api/cameras/select', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ index: parseInt(idx) })
+                });
+                if (res.ok) {
+                    showToast("Camera changed successfully!");
+                    setTimeout(fetchCameras, 1500);
+                }
+            } catch (e) {
+                console.error("Camera change failed", e);
+            }
+        }
+        
+        window.onload = () => {
+            loadSettings();
+            fetchCameras();
+        };
     </script>
 </body>
 </html>
