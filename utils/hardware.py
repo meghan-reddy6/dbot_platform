@@ -61,19 +61,28 @@ def available_ort_providers() -> set:
     return providers
 
 
-def create_session(path: str, providers: list):
+def arm64_cpu_needs_unfused_quantized() -> bool:
+    """True where ONNX Runtime's fused int8 CPU kernels give wrong face detections (64-bit ARM)."""
+    return _ARM64
+
+
+def create_session(path: str, providers: list, threads: int = 0):
     """InferenceSession for a provider list; when it starts with the QNN plugin, the session runs on the NPU
-    (HTP backend) with ONNX Runtime's CPU EP taking any unsupported nodes."""
+    (HTP backend) with ONNX Runtime's CPU EP taking any unsupported nodes. `threads` caps the CPU threads of a
+    session that shares the CPU with the pose model."""
     import onnxruntime as ort
 
     global _arm64_note_logged
+    options = ort.SessionOptions()
+    if threads:
+        options.intra_op_num_threads = threads
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
     devices = qnn_plugin_devices()
     if devices and providers and providers[0] == _QNN_EP:
         import onnxruntime_qnn
 
         # No disable_quant_qdq here: it lets ONNX Runtime constant-fold DequantizeLinear, so the NPU would get
         # float weights instead of the quantized model. The NPU ran every node of the face detector.
-        options = ort.SessionOptions()
         options.add_provider_for_devices(devices, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})
         return ort.InferenceSession(path, sess_options=options)
     if devices:
@@ -83,10 +92,8 @@ def create_session(path: str, providers: list):
             _arm64_note_logged = True
             logger.info("64-bit ARM CPU: quantized models run without int8 fusion (ONNX Runtime's fused kernels "
                         "give wrong face detections here).")
-        options = ort.SessionOptions()
         options.add_session_config_entry("session.disable_quant_qdq", "1")
-        return ort.InferenceSession(path, sess_options=options, providers=providers)
-    return ort.InferenceSession(path, providers=providers)
+    return ort.InferenceSession(path, sess_options=options, providers=providers)
 
 
 @dataclass

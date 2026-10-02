@@ -38,16 +38,25 @@ def load_quantization(metadata_path: str) -> dict:
     return params
 
 
+# The face models run in the worker process next to the pose model; a few threads keep them out of its way.
+_FACE_MODEL_THREADS = 2
+
+
 def _create_session(path: str, providers: list):
-    from utils.hardware import create_session
+    from utils.hardware import arm64_cpu_needs_unfused_quantized, create_session
 
     try:
-        return create_session(path, providers)
+        session = create_session(path, providers, threads=_FACE_MODEL_THREADS)
     except Exception as e:
         if providers == ["CPUExecutionProvider"]:
             raise
         logger.warning(f"{os.path.basename(path)} failed on {providers}: {e}. Falling back to CPU.")
-        return create_session(path, ["CPUExecutionProvider"])
+        return create_session(path, ["CPUExecutionProvider"], threads=_FACE_MODEL_THREADS)
+    if arm64_cpu_needs_unfused_quantized() and session.get_providers()[0] != "CPUExecutionProvider":
+        # ONNX Runtime's own fallback would rebuild the session on the CPU without create_session's ARM setting;
+        # an accelerator failure instead reaches the worker, which rebuilds the recognizer through this function.
+        session.disable_fallback()
+    return session
 
 class FaceAligner:
     """
@@ -163,7 +172,9 @@ class FaceRecognizer:
         providers = HardwareDetector.detect().get_ort_providers()
 
         if detector_path and os.path.exists(detector_path) and landmark_path and os.path.exists(landmark_path):
-            self.face_net = _create_session(detector_path, providers)
+            # DirectML rejects this quantized detector ("two nodes with same node name"); it takes ~2 ms on the CPU.
+            detector_providers = [p for p in providers if p != "DmlExecutionProvider"] or ["CPUExecutionProvider"]
+            self.face_net = _create_session(detector_path, detector_providers)
             self.landmark_net = _create_session(landmark_path, providers)
         else:
             logger.warning("Detector or Landmark models missing. Face Recognition degraded.")
