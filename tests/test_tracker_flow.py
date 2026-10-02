@@ -70,13 +70,16 @@ def _seated_person(dx=0.0, slouch=False):
 class _Script:
     """Detections per frame: one seated person for `present` frames (slouching in `slouch`), then nobody."""
 
-    def __init__(self, present, slouch=range(0)):
+    def __init__(self, present, slouch=range(0), absent=range(0)):
         self.present = present
         self.slouch = slouch
+        self.absent = absent
         self.frame = 0
 
     def detect(self, frame):
         self.frame += 1
+        if self.frame in self.absent:
+            return []
         return [_seated_person(slouch=self.frame in self.slouch)] if self.frame <= self.present else []
 
     def extract_pupil_gaze(self, frame, left_eye, right_eye, threshold=0.75):
@@ -153,6 +156,22 @@ def test_screen_time_and_sitting_limit_trace_is_unchanged(make_engine):
 
     assert trace == EXPECTED_TIMER_TRACE
     assert engine.alert_manager.spoken == ["calibration_prompt", "calibration_success", "ocular_break", "session_limit"]
+
+
+def test_a_video_call_pauses_tracking_instead_of_ending_the_session(make_engine):
+    # Frames 201-215 come back without a detection, as while a camera adjusts after another app released it.
+    engine = make_engine(_Script(present=10_000, absent=range(201, 216)))
+    _run(engine, 200)
+    session = engine.active_sessions["Alice"]
+    tracks, sitting = set(engine.tracked_persons), session.sitting_duration_clock
+    for _ in range(600):  # ten minutes of black frames: the pipeline holds the tracks
+        engine.clock.now += 1.0
+        engine.hold_tracks()
+    _run(engine, 45)
+
+    assert set(engine.tracked_persons) == tracks
+    assert engine.active_sessions["Alice"] is session
+    assert session.sitting_duration_clock - sitting < 3.5  # 1 s of frames plus one capped step, not 600 s
 
 
 # Recorded from the pre-refactor engine. 150 frames present (5 s), then gone: recognised after 5 worker

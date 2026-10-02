@@ -114,8 +114,13 @@ def run_step(camera, engine, status: PipelineStatus) -> bool:
     if frame is None:
         return False
     try:
-        status.record_brightness(is_black(frame))
-        engine.process_frame_mot(frame, frame.shape)
+        black = is_black(frame)
+        status.record_brightness(black)
+        if black:
+            # A black image says nothing about the desk: a video call holding the camera must not end the session.
+            engine.hold_tracks()
+        else:
+            engine.process_frame_mot(frame, frame.shape)
         if status.viewers > 0:
             annotate(frame, engine)
             ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])

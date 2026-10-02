@@ -507,7 +507,7 @@
                     data.available_cameras.forEach(cam => {
                         const opt = document.createElement('option');
                         opt.value = cam.index;
-                        opt.text = `[${cam.type}] ${cam.name}`;
+                        opt.text = `[${cam.type}] ${cam.name}` + (cam.status === 'Unverified' ? ' (unverified)' : '');
                         if (String(cam.index) === String(data.active_index)) {
                             opt.selected = true;
                             document.getElementById('camera-metadata').innerText = `Active | Path: ${cam.path}`;

@@ -10,7 +10,7 @@ from core.pipeline import PipelineStatus, inference_loop, run_step
 
 
 def _frame():
-    return np.zeros((48, 64, 3), np.uint8)
+    return np.full((48, 64, 3), 90, np.uint8)
 
 
 class FakeCamera:
@@ -27,11 +27,15 @@ class FakeEngine:
         self.tracked_persons = {}
         self.fail_times = fail_times
         self.calls = 0
+        self.holds = 0
 
     def process_frame_mot(self, frame, frame_shape):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("detector exploded")
+
+    def hold_tracks(self):
+        self.holds += 1
 
 
 def test_a_failing_frame_does_not_stop_the_loop():
@@ -45,19 +49,30 @@ def test_a_failing_frame_does_not_stop_the_loop():
 
 def test_black_frames_are_timed_until_a_real_frame_arrives():
     status, engine = PipelineStatus(), FakeEngine()
+    black = np.zeros((48, 64, 3), np.uint8)
     dim = np.full((48, 64, 3), 8, np.uint8)  # a dark room is dim, not all zero
     run_step(FakeCamera([dim]), engine, status)
     assert status.black_since is None
 
-    run_step(FakeCamera([_frame()]), engine, status)
+    run_step(FakeCamera([black]), engine, status)
     status.black_since -= 5.0  # the black frames started 5 s ago
-    run_step(FakeCamera([_frame()]), engine, status)
+    run_step(FakeCamera([black]), engine, status)
     assert status.snapshot()["black_for_s"] >= 5.0
 
     run_step(FakeCamera([dim]), engine, status)
     assert status.snapshot()["black_for_s"] == 0.0
     assert not cm.is_black(np.zeros((0, 0, 3), np.uint8))  # an empty frame must not crash the capture thread
     assert cm.is_black(np.full((48, 64), 4, np.uint8)) and not cm.is_black(np.full((48, 64), 5, np.uint8))
+
+
+def test_black_frames_hold_the_tracks_instead_of_running_the_tracker():
+    status, engine = PipelineStatus(), FakeEngine()
+    status.add_viewer()
+    run_step(FakeCamera([np.zeros((48, 64, 3), np.uint8)]), engine, status)
+    assert (engine.calls, engine.holds) == (0, 1)
+    assert status.wait_for_frame(0, timeout=0.01)[0] == 1  # viewers still see the black picture
+    run_step(FakeCamera([_frame()]), engine, status)
+    assert (engine.calls, engine.holds) == (1, 1)
 
 
 def test_jpeg_is_encoded_only_while_someone_watches():
@@ -248,8 +263,32 @@ def test_linux_discovery_puts_capture_nodes_first_and_drops_codec_and_metadata_n
     monkeypatch.setattr(cm, "v4l2_can_capture", lambda dev: probed.append(dev) or can_capture[dev])
     camera = cm.CameraManager()
     camera.os_type = "Linux"
-    assert [c["index"] for c in camera._probe_cameras()] == [2, 0, 1]
+    cameras = camera._probe_cameras()
+    assert [(c["index"], c["status"]) for c in cameras] == [(2, "Available"), (0, "Unverified"), (1, "Unverified")]
     assert "/dev/video0" not in probed and "/dev/video1" not in probed  # the camera server's nodes
+
+
+def test_camera_index_probing_silences_opencv_only_while_it_runs(monkeypatch):
+    levels = []
+
+    class Probe:
+        def __init__(self, idx, *args):
+            levels.append(cm.cv2.utils.logging.getLogLevel())
+            self.idx = idx
+
+        def isOpened(self):
+            return self.idx == 0
+
+        def release(self):
+            pass
+
+    before = cm.cv2.utils.logging.getLogLevel()
+    monkeypatch.setattr(cm.cv2, "VideoCapture", Probe)
+    camera = cm.CameraManager()
+    camera.os_type = "Windows"
+    assert [c["index"] for c in camera._probe_cameras()] == [0]
+    assert set(levels) == {cm.cv2.utils.logging.LOG_LEVEL_SILENT}
+    assert cm.cv2.utils.logging.getLogLevel() == before
 
 
 @pytest.mark.parametrize("caps, device_caps, expected", [

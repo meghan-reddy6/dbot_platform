@@ -130,7 +130,7 @@ class CameraManager:
                         "index": idx,
                         "name": name,
                         "type": "CSI" if "qcom" in name.lower() or "isp" in name.lower() else "USB/Virtual",
-                        "status": "Available"
+                        "status": "Available" if can_capture else "Unverified"
                     })
                 except Exception as e:
                     logger.debug(f"Skipped {dev}: {e}")
@@ -138,23 +138,28 @@ class CameraManager:
             cameras = sorted(capture, key=lambda c: c["index"]) + sorted(unknown, key=lambda c: c["index"])
                     
         else:
-            # Windows/Mac basic probing
-            for idx in range(5):
-                # macOS AVFoundation segfaults when a camera that is streaming on another thread is opened again.
-                if self.active_camera_info and self._streaming_index == idx:
-                    cameras.append(self.active_camera_info)
-                    continue
-                    
-                cap = cv2.VideoCapture(idx)
-                if cap.isOpened():
-                    cameras.append({
-                        "path": str(idx),
-                        "index": idx,
-                        "name": f"Camera {idx}",
-                        "type": "Integrated/USB",
-                        "status": "Available"
-                    })
-                cap.release()
+            # Windows/Mac basic probing. OpenCV's backends log an error for every index without a camera.
+            log_level = cv2.utils.logging.getLogLevel()
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+            try:
+                for idx in range(5):
+                    # macOS AVFoundation segfaults when a camera that is streaming on another thread is opened again.
+                    if self.active_camera_info and self._streaming_index == idx:
+                        cameras.append(self.active_camera_info)
+                        continue
+
+                    cap = cv2.VideoCapture(idx)
+                    if cap.isOpened():
+                        cameras.append({
+                            "path": str(idx),
+                            "index": idx,
+                            "name": f"Camera {idx}",
+                            "type": "Integrated/USB",
+                            "status": "Available"
+                        })
+                    cap.release()
+            finally:
+                cv2.utils.logging.setLogLevel(log_level)
                     
         logger.info(f"Discovery complete. Found {len(cameras)} cameras.")
         return cameras

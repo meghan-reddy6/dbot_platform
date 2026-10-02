@@ -40,6 +40,8 @@ _ANCHOR_LOST_SECONDS = 2.0
 _SEARCH_AFTER_SECONDS = 2.0
 _EVICT_AFTER_SECONDS = 5.0
 _SESSION_TTL_SECONDS = 300.0
+# A gap in observation (black frames, a stalled loop) must not count as minutes of sitting or slouching.
+_MAX_HEALTH_STEP_SECONDS = 2.0
 _ANALYTICS_INTERVAL_SECONDS = 10.0
 _REGISTRATION_TIMEOUT_SECONDS = 60.0
 _REGISTRATION_SAMPLES = 5
@@ -173,6 +175,15 @@ class TrackerEngine(HealthMonitorMixin):
         detections = self.person_detector.detect(frame)
         with self.mutex:
             self._process_frame_locked(frame, frame_shape, detections)
+
+    def hold_tracks(self):
+        """While the camera shows nothing, keeps every track and session as last seen instead of letting them expire."""
+        now = time.monotonic()
+        with self.mutex:
+            for person in self.tracked_persons.values():
+                person.last_seen = now
+            for session in self.active_sessions.values():
+                session.last_seen = now
 
     def _process_frame_locked(self, frame, frame_shape, detections):
         current_time = time.monotonic()
@@ -461,7 +472,7 @@ class TrackerEngine(HealthMonitorMixin):
             live_session = self.active_sessions.get(person.name)
             if live_session:
                 live_session.last_seen = current_time
-        dt = current_time - person.last_update if person.last_update else 0.033
+        dt = min(current_time - person.last_update, _MAX_HEALTH_STEP_SECONDS) if person.last_update else 0.033
         person.last_update = current_time
         person.box = det["box"]
         person.pose = det.get("pose", getattr(person, "pose", None))
