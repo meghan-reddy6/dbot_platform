@@ -61,7 +61,7 @@ DeskBot uses a strictly gated, two-stage cascading inference pipeline to drastic
    The camera capture thread publishes only the newest frame. The inference loop (`core/pipeline.py`) runs pose detection and posture evaluation on its own thread, capped at the `detection_fps` setting, and survives per-frame errors (they are reported by `/api/system/health`). Face recognition runs in a separate, supervised worker process that is restarted with backoff if it dies. Waitress serves the dashboard, and the `AlertManager` speaks alerts from a FIFO `Queue` on its own thread.
 
 ## Prerequisites
-- Python 3.11 or higher.
+- Python 3.11 or higher. On Windows on ARM, use the x64 Python: PyPI has no OpenCV wheel for ARM64 Windows (not tested).
 - A connected USB Webcam or integrated laptop camera.
 - (Optional) `uv` for lightning-fast package installation.
 - (Optional) A dedicated GPU (NVIDIA, AMD) or NPU (like the Rubik Pi's Qualcomm chip) for hardware acceleration. The system gracefully falls back to the CPU if no accelerator is found.
@@ -142,7 +142,7 @@ Once initialized, the terminal will display: `Server pipeline active at: http://
 uv run --group dev pytest tests
 # OR with pip: pip install pytest && python -m pytest tests
 ```
-`tests/test_person_detector.py` also compares the ONNX Runtime decoder with Ultralytics when `ultralytics` is installed (`pip install ultralytics==8.4.82`); without it that test is skipped.
+`tests/test_person_detector.py` also compares the ONNX Runtime decoder with Ultralytics when `ultralytics` is installed (`pip install ultralytics==8.4.82`); without it that test is skipped. `tests/test_face_golden.py` runs the face pipeline on a real photo with the session settings of the machine running the tests; CI runs it on x86 and on 64-bit ARM.
 
 ## API Documentation
 The local Flask server exposes several endpoints for dashboard interaction (POST bodies are JSON unless noted):
@@ -171,7 +171,7 @@ The local Flask server exposes several endpoints for dashboard interaction (POST
 
 ## Troubleshooting
 - **No Targets in Frame:** Ensure your webcam is well-lit and not covered. Ensure you have registered your face in the dashboard.
-- **"camera image has been black" in health:** another app (Teams, the Camera app) is using the webcam, or the lens is covered or in the dark. While another app holds the camera, DirectShow sends black frames at about one per second and keeps doing so after that app lets go, so after 10 s of that DeskBot reopens the camera, retrying with a growing delay (up to 30 s), and recovers on its own once the camera is free.
+- **"camera image has been black" in health:** another app (Teams, the Camera app) is using the webcam, or the lens is covered or in the dark. Tracking pauses while the image is black, so a video call does not end your posture session or count as sitting time; it resumes when the picture returns. While another app holds the camera, DirectShow sends black frames at about one per second and keeps doing so after that app lets go, so after 10 s of that DeskBot reopens the camera, retrying with a growing delay (up to 30 s), and recovers on its own once the camera is free.
 - **Alerts overlapping or not playing:** DeskBot uses PowerShell `System.Speech.Synthesis` under the hood. If alerts fail to play, ensure your Windows sound settings are active and the script isn't heavily CPU bottlenecked.
 - **Tracking swaps rapidly:** Ensure there are no background reflections or portraits behind you causing YOLO ghosting.
 
