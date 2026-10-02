@@ -714,13 +714,17 @@ if (glow === 'red') label.style.color = '#ef4444';
 
                 const table = el('table', { style: 'min-width: 1100px; width: 100%; border-collapse: collapse; text-align: left;' });
                 const header = el('tr');
-                ['Name', ...PROFILE_SLIDERS.map(s => s.label), 'History Export', 'Actions'].forEach(text =>
+                // Actions sit next to the name so they stay on screen when the wide table scrolls sideways.
+                ['Name', 'Actions', ...PROFILE_SLIDERS.map(s => s.label), 'History Export'].forEach(text =>
                     header.append(el('th', { style: HEAD_STYLE, textContent: text })));
                 table.append(header);
 
                 Object.entries(profiles).forEach(([name, p]) => {
                     const row = el('tr');
                     row.append(el('td', { style: CELL_STYLE + ' font-weight: 500;', textContent: name }));
+                    const remove = el('button', { className: 'danger', textContent: 'Delete Profile' });
+                    remove.addEventListener('click', () => deleteProfile(name));
+                    row.append(el('td', { style: CELL_STYLE }, [remove]));
                     PROFILE_SLIDERS.forEach(spec => {
                         const shown = Math.min(spec.max, Math.max(spec.min, Math.round(p[spec.field] / spec.scale)));
                         const readout = el('span', { textContent: `${shown}${spec.unit}` });
@@ -738,9 +742,6 @@ if (glow === 'red') label.style.color = '#ef4444';
                         el('a', { href: '/api/export/json/' + encodeURIComponent(name), target: '_blank', textContent: 'JSON',
                                   style: 'color: #38bdf8; text-decoration: none; font-size: 0.85rem;' }),
                     ]));
-                    const remove = el('button', { className: 'danger', textContent: 'Delete Profile' });
-                    remove.addEventListener('click', () => deleteProfile(name));
-                    row.append(el('td', { style: CELL_STYLE }, [remove]));
                     table.append(row);
                 });
                 container.replaceChildren(el('div', { style: 'overflow-x: auto; padding-bottom: 15px; width: 100%;' }, [table]));
@@ -825,8 +826,8 @@ if (glow === 'red') label.style.color = '#ef4444';
                 rows.push(
                     diagRow('System Architecture', `${health.platform} ${health.arch}`, info),
                     diagRow('Embedded Board', health.is_embedded ? 'YES' : 'NO'),
-                    diagRow('NPU (QNN)', health.has_npu ? 'AVAILABLE' : 'NOT AVAILABLE', health.has_npu ? good : warn),
-                    diagRow('GPU (CUDA / DirectML)', health.has_gpu ? 'AVAILABLE' : 'NOT AVAILABLE', health.has_gpu ? good : warn),
+                    diagRow('Qualcomm NPU (QNN)', health.has_npu ? 'AVAILABLE' : 'NOT DETECTED', health.has_npu ? good : undefined),
+                    diagRow('GPU (CUDA / DirectML)', health.has_gpu ? 'AVAILABLE' : 'NOT AVAILABLE', health.has_gpu ? good : undefined),
                     diagRow('Pose Inference Provider', (health.pose_providers || [])[0] || 'n/a', info),
                     diagRow('Total Available RAM', `${Number(health.ram_gb || 0).toFixed(2)} GB`),
                     diagRow('Live Tracked Sessions', String(health.tracked_targets), info),
@@ -838,7 +839,8 @@ if (glow === 'red') label.style.color = '#ef4444';
                     diagRow('Capture Thread FPS', Number(cam.fps_capture || 0).toFixed(1), good),
                     diagRow('Resolution', cam.resolution || 'Unknown'),
                     diagRow('Active Backend', cam.active_backend || 'None', info),
-                    diagRow('Frame Drops', String(cam.drops || 0), cam.drops > 0 ? bad : good),
+                    // Only the newest camera frame is processed, so older ones are skipped by design.
+                    diagRow('Frames Skipped', String(cam.drops || 0)),
                     diagRow('Reconnects', String(cam.reconnects || 0), cam.reconnects > 0 ? warn : good),
                     diagRow('Frames Processed', String(pipe.frames_processed || 0)),
                     diagRow('Inference Errors', String(pipe.errors || 0), pipe.errors > 0 ? warn : good, true),
