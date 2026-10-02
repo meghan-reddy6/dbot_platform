@@ -1,7 +1,17 @@
 import numpy as np
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
+from config.settings_manager import settings
 from core.tracking.state import Person
 from core.tracking.geometry import Keypoint
+
+
+def resolve_slouch_sensitivity(person, session) -> float:
+    """Per-user neck tolerance (degrees): the profile value on the Person wins over defaults."""
+    for source in (person, session):
+        value = getattr(source, "slouch_sensitivity", None)
+        if value is not None:
+            return float(value)
+    return float(settings.get("neck_pitch_tolerance_degrees", 15.0))
 
 
 class PostureState:
@@ -32,21 +42,23 @@ class PostureAnalyzer:
     def _compute_shoulder_alignment(
         left_shoulder: Keypoint, right_shoulder: Keypoint
     ) -> float:
-        """Calculates the roll angle between shoulders (leaning left/right)."""
-        dx = right_shoulder.x - left_shoulder.x
-        dy = right_shoulder.y - left_shoulder.y
+        """Shoulder-line tilt from horizontal in pixel space, in (-90, 90]; positive = subject's left shoulder lower."""
+        dx = left_shoulder.px - right_shoulder.px
+        dy = left_shoulder.py - right_shoulder.py
+        # Facing the camera the subject's left shoulder is on the image right; facing away it is not.
+        if dx < 0:
+            dx, dy = -dx, -dy
         return np.degrees(np.arctan2(dy, dx))
 
     @staticmethod
     def _compute_spine_alignment(
         shoulder_center: Tuple[float, float], hip_center: Tuple[float, float]
     ) -> float:
-        """Calculates the angle of the spine relative to the vertical axis (leaning left/right)."""
+        """Spine angle from vertical, in degrees; expects pixel coordinates."""
         dx = shoulder_center[0] - hip_center[0]
         dy = shoulder_center[1] - hip_center[1]
         angle = np.degrees(np.arctan2(dy, dx))
         # Perfect vertical spine is -90 degrees in OpenCV coordinate space (y goes down).
-        # We normalize to 0 being perfectly vertical.
         return abs(angle + 90.0)
 
     @staticmethod
@@ -68,7 +80,6 @@ class PostureAnalyzer:
             return state
 
         shoulder_width = np.abs(r_shoulder.x - l_shoulder.x)
-        shoulder_center_x = (l_shoulder.x + r_shoulder.x) / 2.0
         shoulder_center_y = (l_shoulder.y + r_shoulder.y) / 2.0
 
         # 1. Torso Depth Ratio (Z-axis leaning surrogate)
@@ -84,14 +95,14 @@ class PostureAnalyzer:
         )
         state.neck_pitch = current_neck_pitch_angle
 
-        if getattr(session, "calibrated_baseline_neck_pitch", 0.0) == 0.0:
+        if getattr(session, "calibrated_baseline_neck_pitch", None) in (None, 0.0):
             session.calibrated_baseline_neck_pitch = current_neck_pitch_angle
 
         relative_slouch = (
             current_neck_pitch_angle - session.calibrated_baseline_neck_pitch
         )
 
-        if not hasattr(session, "posture_baseline"):
+        if getattr(session, "posture_baseline", None) is None:
             session.posture_baseline = 0.5
 
         # 3. Shoulder and Spine Alignment
@@ -99,36 +110,33 @@ class PostureAnalyzer:
             l_shoulder, r_shoulder
         )
         if l_hip and r_hip:
-            hip_center_x = (l_hip.x + r_hip.x) / 2.0
-            hip_center_y = (l_hip.y + r_hip.y) / 2.0
             state.spine_alignment = PostureAnalyzer._compute_spine_alignment(
-                (shoulder_center_x, shoulder_center_y), (hip_center_x, hip_center_y)
+                ((l_shoulder.px + r_shoulder.px) / 2.0, (l_shoulder.py + r_shoulder.py) / 2.0),
+                ((l_hip.px + r_hip.px) / 2.0, (l_hip.py + r_hip.py) / 2.0),
             )
 
         # 4. Slouch Evaluation
+        slouch_sensitivity = resolve_slouch_sensitivity(person, session)
         if session.health_status == "Posture Deficit Alert":
             # Must satisfy a stricter upright bound to clear an existing alert
             is_fully_upright = (
                 current_torso_depth_ratio >= session.posture_baseline * 0.95
-            ) and (relative_slouch <= getattr(session, "slouch_sensitivity", 15.0) * 0.40)
+            ) and (relative_slouch <= slouch_sensitivity * 0.40)
             state.is_slouching = not is_fully_upright
         else:
             # Tolerant bounds to trigger a new alert
-            is_spine_skewed = (
-                state.spine_alignment > 15.0
-            )  # Leaning sideways > 15 degrees
-            slouch_sensitivity = getattr(session, "slouch_sensitivity", 15.0)
+            is_spine_skewed = state.spine_alignment > settings.spine_tolerance_degrees
             state.is_slouching = (
-                (current_torso_depth_ratio < (session.posture_baseline * 0.85))
+                (current_torso_depth_ratio < (session.posture_baseline * settings.slouch_ratio_threshold))
                 or (relative_slouch > slouch_sensitivity)
                 or is_spine_skewed
             )
 
         # 5. Standing Evaluation
-        normalized_height_delta = (
-            getattr(session, "baseline_shoulder_y", shoulder_center_y)
-            - shoulder_center_y
-        ) / max(shoulder_width, 1e-6)
+        baseline_shoulder_y = getattr(session, "baseline_shoulder_y", None)
+        if baseline_shoulder_y is None:
+            baseline_shoulder_y = shoulder_center_y
+        normalized_height_delta = (baseline_shoulder_y - shoulder_center_y) / max(shoulder_width, 1e-6)
         
         box_h = person.box[3] - person.box[1]
         box_w = person.box[2] - person.box[0]

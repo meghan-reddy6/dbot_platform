@@ -30,3 +30,6 @@ Thumbs.db
 .agents/*
 
 profiles_cache.json
+
+# Runtime data: user settings and the telemetry/biometrics database
+data/

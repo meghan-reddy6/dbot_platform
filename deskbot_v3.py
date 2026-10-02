@@ -1,14 +1,15 @@
-import time
-import cv2
 import logging
+import os
 import threading
+
 import flask.cli
 from flask import Flask
 
 from database.crud import DatabaseManager
-from core.tracking import TrackerEngine, state_mutex
+from core.pipeline import PipelineStatus, inference_loop
+from core.tracking import TrackerEngine
 from camera.camera_manager import CameraManager
-from api.routes import api_bp
+from api.routes import MAX_UPLOAD_BYTES, api_bp
 
 # SURGICAL LOG SILENCER: Disables high-frequency HTTP request polling print streams completely
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -16,58 +17,27 @@ flask.cli.show_server_banner = lambda *args: None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DeskBotV3.MainOrchestrator")
 
-app = Flask(__name__)
-db_conn = None
-health_evaluator = None
-camera_bridge = None
+# Loopback only: the dashboard serves camera video and biometric data without authentication.
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("DESKBOT_PORT", "5050"))
 
-latest_frame_buffer = None
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 app.register_blueprint(api_bp)
 
+# Each open video feed holds a thread for as long as the dashboard is open. Waitress buffers a whole
+# request body (1 GiB by default) before Flask sees it, so the upload limit must be enforced here too.
+WAITRESS_OPTIONS = {"threads": 8, "max_request_body_size": MAX_UPLOAD_BYTES + 1}  # waitress rejects at >=
 
-def get_latest_frame():
-    global latest_frame_buffer
-    return latest_frame_buffer
 
-
-def master_inference_loop():
-    global latest_frame_buffer
-    while True:
-        frame = camera_bridge.get_frame()
-        if frame is None:
-            time.sleep(0.01)
-            continue
-        h, w, _ = frame.shape
-
-        health_evaluator.process_frame_mot(frame, frame.shape)
-        annotated_layer = frame.copy()
-
-        with state_mutex:
-            for tracked_person in health_evaluator.tracked_persons.values():
-                if tracked_person.state in ["Searching / Re-acquiring", "Absent"]:
-                    continue
-                x1, y1, x2, y2 = (
-                    int(tracked_person.box[0]),
-                    int(tracked_person.box[1]),
-                    int(tracked_person.box[2]),
-                    int(tracked_person.box[3]),
-                )
-                color = (
-                    (0, 255, 135)
-                    if tracked_person.is_verified or tracked_person.name != "Unknown"
-                    else (67, 159, 255)
-                )
-                cv2.rectangle(annotated_layer, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(
-                    annotated_layer,
-                    f"{tracked_person.name} [{tracked_person.state}]",
-                    (x1, y1 - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
-                    2,
-                )
-            latest_frame_buffer = annotated_layer
+def serve(flask_app):
+    try:
+        from waitress import serve as waitress_serve
+    except ImportError:
+        logger.warning("waitress is not installed; falling back to the Flask development server.")
+        flask_app.run(host=HOST, port=PORT, debug=False, threaded=True)
+        return
+    waitress_serve(flask_app, host=HOST, port=PORT, **WAITRESS_OPTIONS)
 
 
 if __name__ == "__main__":
@@ -84,20 +54,30 @@ if __name__ == "__main__":
     db_conn = DatabaseManager()
     health_evaluator = TrackerEngine(db_conn)
     camera_bridge = CameraManager(camera_index=0)
+    pipeline_status = PipelineStatus()
+    stop_event = threading.Event()
 
     # Inject dependencies into Flask config for Blueprint to access
     app.config["DB_CONN"] = db_conn
     app.config["HEALTH_EVALUATOR"] = health_evaluator
-    app.config["GET_LATEST_FRAME"] = get_latest_frame
     app.config["CAMERA_BRIDGE"] = camera_bridge
+    app.config["PIPELINE_STATUS"] = pipeline_status
 
     try:
         camera_bridge.start()
-        threading.Thread(target=master_inference_loop, daemon=True).start()
-        logger.info("Server pipeline active at: http://localhost:5050")
-        app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
+        threading.Thread(
+            target=inference_loop,
+            args=(camera_bridge, health_evaluator, pipeline_status, stop_event),
+            daemon=True,
+            name="inference",
+        ).start()
+        logger.info(f"Server pipeline active at: http://localhost:{PORT}")
+        serve(app)
     except KeyboardInterrupt:
         print("\n[!] SIGINT received. Commencing clean resource teardown...")
     finally:
+        stop_event.set()
         camera_bridge.stop()
+        health_evaluator.shutdown()
+        db_conn.flush()
         print("[*] Clean Teardown Complete.")

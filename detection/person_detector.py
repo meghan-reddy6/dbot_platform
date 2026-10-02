@@ -1,95 +1,175 @@
-import numpy as np
 import logging
-from typing import List, Dict, Any, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+
 from core.tracking.geometry import Keypoint
 
 logger = logging.getLogger(__name__)
 
+# Ultralytics predict() defaults, kept so detections match the previous Ultralytics-based path.
+CONF_THRESHOLD = 0.25
+IOU_THRESHOLD = 0.7
+MAX_DETECTIONS = 300
+PAD_VALUE = 114
+KEYPOINT_CONF = 0.40
+
+# Generic head (mm) for a subject facing the camera, in camera axes: x = image right (the
+# subject's left), y = down, z = away from the camera. Row order = COCO keypoints 0..4.
+HEAD_MODEL_POINTS = np.array(
+    [
+        (0.0, 0.0, 0.0),  # nose
+        (30.0, -30.0, 30.0),  # left eye
+        (-30.0, -30.0, 30.0),  # right eye
+        (50.0, 0.0, 50.0),  # left ear
+        (-50.0, 0.0, 50.0),  # right ear
+    ],
+    dtype=np.float64,
+)
+
+
+def letterbox(image: np.ndarray, size: int) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+    """Resize keeping aspect ratio and pad to size x size (same arithmetic as Ultralytics LetterBox)."""
+    h, w = image.shape[:2]
+    gain = min(size / h, size / w)
+    new_w, new_h = round(w * gain), round(h * gain)
+    if (new_w, new_h) != (w, h):
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    pad_w, pad_h = (size - new_w) / 2, (size - new_h) / 2
+    top, bottom = round(pad_h - 0.1), round(pad_h + 0.1)
+    left, right = round(pad_w - 0.1), round(pad_w + 0.1)
+    padded = cv2.copyMakeBorder(
+        image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(PAD_VALUE,) * 3
+    )
+    return padded, gain, (left, top)
+
+
+def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
+    """Greedy NMS over xyxy boxes; returns kept indices, highest score first."""
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = np.argsort(-scores, kind="stable")
+    keep = []
+    while order.size:
+        i = order[0]
+        keep.append(i)
+        rest = order[1:]
+        inter = np.clip(np.minimum(x2[i], x2[rest]) - np.maximum(x1[i], x1[rest]), 0, None) * np.clip(
+            np.minimum(y2[i], y2[rest]) - np.maximum(y1[i], y1[rest]), 0, None
+        )
+        iou = inter / (areas[i] + areas[rest] - inter + 1e-9)
+        order = rest[iou <= iou_threshold]
+    return np.array(keep, dtype=np.int64)
+
+
+def decode_pose_output(
+    output: np.ndarray,
+    gain: float,
+    pad: Tuple[int, int],
+    frame_shape: Tuple[int, int],
+    conf_threshold: float = CONF_THRESHOLD,
+    iou_threshold: float = IOU_THRESHOLD,
+    max_detections: int = MAX_DETECTIONS,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Decode a YOLOv8-pose (1, 5 + 3K, N) output into frame-space boxes, scores and (K, 3) keypoints."""
+    preds = output[0].T
+    preds = preds[preds[:, 4] > conf_threshold]
+    if not len(preds):
+        return np.zeros((0, 4), np.float32), np.zeros(0, np.float32), np.zeros((0, 17, 3), np.float32)
+
+    cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+    boxes = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
+    keep = nms(boxes, preds[:, 4], iou_threshold)[:max_detections]
+    boxes, scores = boxes[keep], preds[keep, 4]
+    keypoints = preds[keep, 5:].reshape(len(keep), -1, 3).copy()
+
+    h, w = frame_shape[:2]
+    boxes[:, [0, 2]] = np.clip((boxes[:, [0, 2]] - pad[0]) / gain, 0, w)
+    boxes[:, [1, 3]] = np.clip((boxes[:, [1, 3]] - pad[1]) / gain, 0, h)
+    keypoints[..., 0] = np.clip((keypoints[..., 0] - pad[0]) / gain, 0, w)
+    keypoints[..., 1] = np.clip((keypoints[..., 1] - pad[1]) / gain, 0, h)
+    return boxes, scores, keypoints
+
+
+def solve_head_pose(
+    face_points: np.ndarray, frame_shape: Tuple[int, int]
+) -> Optional[Tuple[float, float, float]]:
+    """(pitch, yaw, roll) in degrees from the nose, eyes and ears; pitch > 0 means head tilted down."""
+    h, w = frame_shape[:2]
+    camera_matrix = np.array([[w, 0, w / 2.0], [0, w, h / 2.0], [0, 0, 1]], dtype=np.float64)
+    ok, rvec, _ = cv2.solvePnP(
+        HEAD_MODEL_POINTS,
+        np.asarray(face_points, dtype=np.float64).reshape(-1, 1, 2),
+        camera_matrix,
+        np.zeros((4, 1)),
+        flags=cv2.SOLVEPNP_SQPNP,
+    )
+    if not ok:
+        return None
+    rotation, _ = cv2.Rodrigues(rvec)
+    pitch = math.degrees(math.atan2(rotation[2, 1], rotation[2, 2]))
+    yaw = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 0]))))
+    roll = math.degrees(math.atan2(rotation[1, 0], rotation[0, 0]))
+    return pitch, yaw, roll
+
 
 class PersonDetector:
-    """
-    Executes Person Detection (YOLOv8 Pose).
-    This implementation wraps the ultralytics native implementation
-    for 100% backward compatibility during the Edge AI migration,
-    but handles hardware acceleration fallbacks automatically.
-    """
+    """YOLOv8-pose person detection on ONNX Runtime."""
 
-    def __init__(self, model_dir: str = None):
+    def __init__(self, model_path: Optional[str] = None, providers: Optional[List[str]] = None):
+        from core.model_manager import ModelManager
 
-        try:
-            from ultralytics import YOLO
-            from core.model_manager import ModelManager
+        self.session = None
+        self.input_size = 640
+        path = model_path or ModelManager.get_model_path("yolo_pose")
+        if not path or not str(path).endswith(".onnx"):
+            logger.warning(f"YOLO pose ONNX model missing ({path}). Detection disabled.")
+            return
 
-            yolo_path = ModelManager.get_model_path("yolo_pose")
-            
-            if yolo_path:
-                self.stage1_model = YOLO(yolo_path, task="pose")
-                if str(yolo_path).endswith('.onnx'):
-                    logger.info(f"PersonDetector Initialized via ONNX Runtime: {yolo_path}")
-                else:
-                    logger.info(f"PersonDetector Initialized via PyTorch: {yolo_path}")
-            else:
-                self.stage1_model = None
-                logger.warning("YOLO Pose model missing. Detection disabled.")
-        except Exception as e:
-            logger.error(f"PersonDetector YOLO initialization failed: {e}")
-            self.stage1_model = None
+        if providers is None:
+            from utils.hardware import HardwareDetector
 
-        self.last_pitch, self.last_yaw, self.last_roll = 0.0, 0.0, 0.0
+            providers = HardwareDetector.detect().get_ort_providers()
+        self.session = self._create_session(str(path), providers)
+        if self.session is None:
+            return
 
-    def _solve_pnp(
-        self, landmarks_6: np.ndarray, frame_shape: Tuple[int, int]
-    ) -> Tuple[float, float, float]:
-        """PnP Head Pose estimation stub, transferred from old pipeline."""
-        import cv2
-        import math
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        if isinstance(model_input.shape[2], int):
+            self.input_size = model_input.shape[2]
+        logger.info(f"PersonDetector initialized: {path} on {self.session.get_providers()}")
 
-        h, w = frame_shape
-        focal_length = w
-        camera_matrix = np.array(
-            [[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]],
-            dtype="double",
-        )
-        dist_coeffs = np.zeros((4, 1))
+    @staticmethod
+    def _create_session(path: str, providers: List[str]):
+        from utils.hardware import create_session
 
-        model_points = np.array(
-            [
-                (0.0, 0.0, 0.0),  # Nose tip
-                (-30.0, -30.0, -30.0),  # Left eye
-                (30.0, -30.0, -30.0),  # Right eye
-                (-50.0, 0.0, -50.0),  # Left ear
-                (50.0, 0.0, -50.0),  # Right ear
-                (0.0, 50.0, -20.0),  # Neck center
-            ],
-            dtype=np.float32,
-        )
+        attempts = [providers] if providers == ["CPUExecutionProvider"] else [providers, ["CPUExecutionProvider"]]
+        for attempt in attempts:
+            try:
+                session = create_session(path, attempt)
+                # Some accelerators accept the graph but fail on the first run; find out now, not per frame.
+                model_input = session.get_inputs()[0]
+                size = model_input.shape[2] if isinstance(model_input.shape[2], int) else 640
+                session.run(None, {model_input.name: np.zeros((1, 3, size, size), np.float32)})
+                return session
+            except Exception as e:
+                logger.error(f"PersonDetector could not start on {attempt}: {e}")
+        return None
 
-        success, rotation_vector, translation_vector = cv2.solvePnP(
-            model_points,
-            landmarks_6,
-            camera_matrix,
-            dist_coeffs,
-            flags=cv2.SOLVEPNP_ITERATIVE,
-        )
-
-        if not success:
-            return 0.0, 0.0, 0.0
-
-        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-        proj_matrix = np.hstack((rotation_matrix, translation_vector))
-        _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(proj_matrix)
-        pitch, yaw, roll = [
-            math.degrees(math.radians(angle[0])) for angle in euler_angles
-        ]
-
-        self.last_pitch, self.last_yaw, self.last_roll = pitch, yaw, roll
-        return pitch, yaw, roll
+    @property
+    def providers(self) -> List[str]:
+        return self.session.get_providers() if self.session else []
 
     def extract_pupil_gaze(
-        self, frame: np.ndarray, left_eye: np.ndarray, right_eye: np.ndarray
+        self,
+        frame: np.ndarray,
+        left_eye: np.ndarray,
+        right_eye: np.ndarray,
+        threshold: float = 0.75,
     ) -> Tuple[float, bool]:
-        import cv2
-
         try:
             ex, ey = int(left_eye[0]), int(left_eye[1])
             eye_dist = np.linalg.norm(np.array(left_eye) - np.array(right_eye))
@@ -116,105 +196,61 @@ class PersonDetector:
                     eye_width = roi_size * 2
                     eye_center_x = roi_size
                     gaze_x = (cx - eye_center_x) / (eye_width / 2.0)
-                    is_looking_away = abs(gaze_x) > 0.75
+                    is_looking_away = abs(gaze_x) > threshold
                     return gaze_x, is_looking_away
             return 0.0, False
         except Exception:
             return 0.0, False
 
     def detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        if self.session is None:
+            return []
         h, w = frame.shape[:2]
+        padded, gain, pad = letterbox(frame, self.input_size)
+        blob = np.ascontiguousarray(padded[:, :, ::-1].transpose(2, 0, 1)[None], dtype=np.float32) / 255.0
+        output = self.session.run(None, {self.input_name: blob})[0]
+        _, _, keypoints = decode_pose_output(output, gain, pad, (h, w))
+
         detections = []
-        if not self.stage1_model:
-            return detections
-        try:
-            results = self.stage1_model(frame, verbose=False)
-        except Exception:
-            return detections
-
-        for r in results:
-            if r.keypoints is None or r.keypoints.xy is None:
-                continue
-            keypoints = r.keypoints.xy.cpu().numpy()
-            keypoints_conf = (
-                r.keypoints.conf.cpu().numpy()
-                if (hasattr(r.keypoints, "conf") and r.keypoints.conf is not None)
-                else None
-            )
-
-            for i in range(len(keypoints)):
-                kpts = keypoints[i]
-                confs = (
-                    keypoints_conf[i]
-                    if keypoints_conf is not None
-                    else np.ones(len(kpts))
-                )
-                if (
-                    len(kpts) < 7
-                    or confs[0] <= 0.40
-                    or confs[5] <= 0.40
-                    or confs[6] <= 0.40
-                ):
-                    continue
-                valid_kpts = [kpts[j] for j in range(len(kpts)) if confs[j] > 0.40]
-                if not valid_kpts:
-                    continue
-                xs = [kp[0] for kp in valid_kpts]
-                ys = [kp[1] for kp in valid_kpts]
-                x_min, x_max = min(xs), max(xs)
-                y_min, y_max = min(ys), max(ys)
-                bw, bh = x_max - x_min, y_max - y_min
-                if bw < 0.18 * w or (bw * bh) > (0.85 * w * h):
-                    continue
-                if len(kpts) < 13:
-                    continue
-                nose, l_eye, r_eye = kpts[0], kpts[1], kpts[2]
-                l_ear, r_ear = kpts[3], kpts[4]
-                l_shoulder, r_shoulder = kpts[5], kpts[6]
-                l_hip, r_hip = kpts[11], kpts[12]
-                pose = {
-                    "nose": Keypoint(nose[0], nose[1], w, h),
-                    "left_ear": Keypoint(l_ear[0], l_ear[1], w, h),
-                    "right_ear": Keypoint(r_ear[0], r_ear[1], w, h),
-                    "left_shoulder": Keypoint(l_shoulder[0], l_shoulder[1], w, h),
-                    "right_shoulder": Keypoint(r_shoulder[0], r_shoulder[1], w, h),
-                    "left_hip": Keypoint(l_hip[0], l_hip[1], w, h),
-                    "right_hip": Keypoint(r_hip[0], r_hip[1], w, h),
-                }
-                has_valid_face = (
-                    confs[1] > 0.40
-                    and confs[2] > 0.40
-                    and confs[3] > 0.40
-                    and confs[4] > 0.40
-                )
-                neck = [
-                    (l_shoulder[0] + r_shoulder[0]) / 2.0,
-                    (l_shoulder[1] + r_shoulder[1]) / 2.0,
-                ]
-                landmarks_6 = np.array(
-                    [nose, l_eye, r_eye, l_ear, r_ear, neck], dtype=np.float32
-                )
-                if has_valid_face:
-                    pitch, yaw, roll = self._solve_pnp(landmarks_6, (h, w))
-                else:
-                    pitch, yaw, roll = self.last_pitch, self.last_yaw, self.last_roll
-
-                detections.append(
-                    {
-                        "box": np.array([x_min, y_min, x_max, y_max]),
-                        "landmarks": landmarks_6,
-                        "pose": pose,
-                        "nose": nose,
-                        "l_eye": l_eye,
-                        "r_eye": r_eye,
-                        "shoulders": [l_shoulder, r_shoulder],
-                        "hips": [l_hip, r_hip],
-                        "pitch": pitch,
-                        "yaw": yaw,
-                        "roll": roll,
-                        "roi_frame": frame[
-                            int(y_min) : int(y_max), int(x_min) : int(x_max)
-                        ],
-                    }
-                )
+        for person_kpts in keypoints:
+            detection = self._build_detection(person_kpts[:, :2], person_kpts[:, 2], w, h)
+            if detection is not None:
+                detections.append(detection)
         return detections
+
+    @staticmethod
+    def _build_detection(kpts: np.ndarray, confs: np.ndarray, w: int, h: int) -> Optional[Dict[str, Any]]:
+        if len(kpts) < 13 or min(confs[0], confs[5], confs[6]) <= KEYPOINT_CONF:
+            return None
+        valid = kpts[confs > KEYPOINT_CONF]
+        x_min, y_min = valid.min(axis=0)
+        x_max, y_max = valid.max(axis=0)
+        bw, bh = x_max - x_min, y_max - y_min
+        if bw < 0.18 * w or (bw * bh) > (0.85 * w * h):
+            return None
+
+        nose, l_eye, r_eye = kpts[0], kpts[1], kpts[2]
+        l_ear, r_ear = kpts[3], kpts[4]
+        l_shoulder, r_shoulder = kpts[5], kpts[6]
+        l_hip, r_hip = kpts[11], kpts[12]
+        detection = {
+            "box": np.array([x_min, y_min, x_max, y_max]),
+            "pose": {
+                "nose": Keypoint(nose[0], nose[1], w, h),
+                "left_ear": Keypoint(l_ear[0], l_ear[1], w, h),
+                "right_ear": Keypoint(r_ear[0], r_ear[1], w, h),
+                "left_shoulder": Keypoint(l_shoulder[0], l_shoulder[1], w, h),
+                "right_shoulder": Keypoint(r_shoulder[0], r_shoulder[1], w, h),
+                "left_hip": Keypoint(l_hip[0], l_hip[1], w, h),
+                "right_hip": Keypoint(r_hip[0], r_hip[1], w, h),
+            },
+            "nose": nose,
+            "l_eye": l_eye,
+            "r_eye": r_eye,
+        }
+        # Head angles only when the whole face is visible; callers keep the track's previous angles otherwise.
+        if min(confs[1:5]) > KEYPOINT_CONF:
+            angles = solve_head_pose(kpts[:5], (h, w))
+            if angles is not None:
+                detection["pitch"], detection["yaw"], detection["roll"] = angles
+        return detection

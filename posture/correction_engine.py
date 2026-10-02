@@ -10,9 +10,12 @@ class CorrectionEngine:
         Calculates severity and assigns the proper alert string.
         """
         from config.settings_manager import settings
+        from posture.posture_analyzer import resolve_slouch_sensitivity
 
         torso_ratio = getattr(person, "smoothed_ratio", 0.5)
-        baseline_ratio = getattr(session, "posture_baseline", 0.5)
+        baseline_ratio = getattr(session, "posture_baseline", None)
+        if baseline_ratio is None:
+            baseline_ratio = 0.5
         spine_alignment = getattr(person, "spine_alignment", 0.0)
         shoulder_alignment = getattr(person, "shoulder_alignment", 0.0)
 
@@ -25,10 +28,9 @@ class CorrectionEngine:
             return "Straighten your back."
 
         # 3. Severe Neck Pitch
-        cal_pitch = getattr(session, "calibrated_baseline_neck_pitch", 0.0)
+        cal_pitch = getattr(session, "calibrated_baseline_neck_pitch", None) or 0.0
         relative_slouch = getattr(person, "pitch", 0.0) - cal_pitch
-        slouch_sensitivity = getattr(session, "slouch_sensitivity", 15.0)
-        if relative_slouch > slouch_sensitivity:
+        if relative_slouch > resolve_slouch_sensitivity(person, session):
             return "Lift your head."
 
         # 4. Shoulder Roll/Asymmetry

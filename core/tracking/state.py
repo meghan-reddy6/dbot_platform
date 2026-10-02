@@ -3,8 +3,10 @@ import time
 import numpy as np
 from collections import deque
 from config.settings_manager import settings
+from .states import HealthStatus, TrackState, Verification
 
-state_mutex = threading.Lock()
+# Re-entrant: API handlers hold it while calling engine methods that take it again.
+state_mutex = threading.RLock()
 
 class UserSession:
     """
@@ -16,11 +18,12 @@ class UserSession:
         self.calibrated_baseline_neck_pitch = None
         self.baseline_shoulder_y = None
         self.last_20_embeddings = deque(maxlen=20)
-        self.last_seen = time.time()
+        self.last_seen = time.monotonic()
         self.is_posture_calibrated = False
+        self.calibrated_at = None  # wall-clock epoch seconds, for display only
 
         # Persistent Temporal State
-        self.first_seen_time = time.time()
+        self.first_seen_time = time.monotonic()
         self.sitting_duration_clock = 0.0
         self.standing_duration_clock = 0.0
         self.slouch_timer = 0.0
@@ -33,7 +36,7 @@ class UserSession:
         self.active_accumulator_time = 0.0
         
         # Status & Flags
-        self.health_status = "Healthy"
+        self.health_status = HealthStatus.HEALTHY
         self.ocular_break_announced = False
         self.session_limit_announced = False
         self.slouch_announced = False
@@ -60,9 +63,9 @@ class Person:
             self.embedding = embedding
         self.box = box
         self.name = "Unknown"
-        self.state = "Unregistered Guest"
-        self.last_state = "Unregistered Guest"
-        self.verification_status = "UNKNOWN"
+        self.state = TrackState.UNREGISTERED
+        self.last_state = TrackState.UNREGISTERED
+        self.verification_status = Verification.UNKNOWN
         self.biometric_match_counter = 0
         self.candidate_name = None
         self.verified_name = None
@@ -72,8 +75,8 @@ class Person:
         self.is_verified = False
         self.is_posture_calibrated = False
 
-        self.last_seen = time.time()
-        self.last_update = time.time()
+        self.last_seen = time.monotonic()
+        self.last_update = time.monotonic()
 
         self.pitch = 0.0
         self.yaw = 0.0
@@ -83,15 +86,14 @@ class Person:
         self.last_20_embeddings = deque(maxlen=20)
         self.is_standing = False
         self.is_looking_away = False
-        self.health_status = "Healthy" # local frame copy for logging
+        self.health_status = HealthStatus.HEALTHY  # local frame copy for logging
 
-        self.slouch_sensitivity = 15.0  # Kept local for dynamic adjustment, overwritten by sync_profiles
+        self.slouch_sensitivity = settings.get("neck_pitch_tolerance_degrees", 15.0)
         self.session_limit = settings.get("session_limit_seconds", 1200)
         self.stand_requirement = settings.get("stand_requirement_seconds", 180)
         self.gaze_away_limit = settings.get("ocular_break_duration_seconds", 20.0)
         self.screen_gaze_limit = settings.get("screen_gaze_limit_seconds", 1200.0)
-        self.biometric_cutoff = settings.get("recognition_threshold_initial", 0.35)
-        self.last_analytics_flush_time = 0.0
+        self.last_analytics_flush_time = time.monotonic()
 
         self.baseline_torso_ratio = 0.0
         self.calibrated_baseline_neck_pitch = 0.0
