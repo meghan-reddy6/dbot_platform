@@ -137,6 +137,14 @@ class SessionManager:
                         "screen_gaze_max": tracked_person.screen_gaze_limit,
                         "ocular_break_current": round(ocular_current),
                         "ocular_break_max": tracked_person.gaze_away_limit,
+                        "is_primary": is_primary,
+                        "calibration": {
+                            "calibrated": bool(session and session.is_posture_calibrated),
+                            "calibrated_at": getattr(session, "calibrated_at", None) if session else None,
+                            "head": session is not None and session.calibrated_baseline_neck_pitch is not None,
+                            "shoulders": session is not None and session.baseline_shoulder_y is not None,
+                            "back": session is not None and session.posture_baseline is not None,
+                        },
                     }
                 )
         return snapshot

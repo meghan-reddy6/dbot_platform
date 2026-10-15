@@ -1,10 +1,99 @@
-import platform
 import os
+import platform
 import psutil
 import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Preference order; filtered at runtime to what the installed onnxruntime build provides.
+_PREFERRED_PROVIDERS = [
+    "QNNExecutionProvider",
+    "CUDAExecutionProvider",
+    "DmlExecutionProvider",
+    "CPUExecutionProvider",
+]
+_QNN_EP = "QNNExecutionProvider"
+_qnn_plugin_devices = None
+# ONNX Runtime's fused int8 CPU kernels on 64-bit ARM compute the quantized face detector wrongly (1.27 and 1.30
+# on a Snapdragon QCS8550: outputs off by up to 125 quantization steps, so no face is ever found). Unfused
+# (DequantizeLinear -> float op -> QuantizeLinear) it finds the same face as on x86. Float models have no QDQ
+# nodes to fuse. session.qdqisint8allowed=0 and mlas.disable_kleidiai=1 do not help.
+_ARM64 = platform.machine().lower() in ("aarch64", "arm64")
+_arm64_note_logged = False
+
+
+def qnn_plugin_devices() -> list:
+    """NPU devices of the onnxruntime-qnn >= 2.0 plugin; loads and registers the plugin on first call.
+
+    Set DESKBOT_DISABLE_QNN=1 to skip it, e.g. if the native plugin crashes or hangs on a board.
+    """
+    global _qnn_plugin_devices
+    if _qnn_plugin_devices is None:
+        _qnn_plugin_devices = []
+        if os.environ.get("DESKBOT_DISABLE_QNN") == "1":
+            return _qnn_plugin_devices
+        try:
+            import onnxruntime as ort
+            import onnxruntime_qnn
+        except ImportError:
+            return _qnn_plugin_devices
+        try:
+            ort.register_execution_provider_library(_QNN_EP, onnxruntime_qnn.get_library_path())
+            # Only a real NPU counts: on x86 hosts the plugin lists its HTP emulator on a CPU device.
+            _qnn_plugin_devices = [
+                d for d in ort.get_ep_devices()
+                if d.ep_name == _QNN_EP and d.device.type == ort.OrtHardwareDeviceType.NPU
+            ]
+        except Exception as e:
+            logger.warning(f"onnxruntime-qnn is installed but its execution provider could not be registered: {e}")
+    return _qnn_plugin_devices
+
+
+def available_ort_providers() -> set:
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return set()
+    providers = set(ort.get_available_providers())
+    if qnn_plugin_devices():
+        providers.add(_QNN_EP)
+    return providers
+
+
+def arm64_cpu_needs_unfused_quantized() -> bool:
+    """True where ONNX Runtime's fused int8 CPU kernels give wrong face detections (64-bit ARM)."""
+    return _ARM64
+
+
+def create_session(path: str, providers: list, threads: int = 0):
+    """InferenceSession for a provider list; when it starts with the QNN plugin, the session runs on the NPU
+    (HTP backend) with ONNX Runtime's CPU EP taking any unsupported nodes. `threads` caps the CPU threads of a
+    session that shares the CPU with the pose model."""
+    import onnxruntime as ort
+
+    global _arm64_note_logged
+    options = ort.SessionOptions()
+    if threads:
+        options.intra_op_num_threads = threads
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    devices = qnn_plugin_devices()
+    if devices and providers and providers[0] == _QNN_EP:
+        import onnxruntime_qnn
+
+        # No disable_quant_qdq here: it lets ONNX Runtime constant-fold DequantizeLinear, so the NPU would get
+        # float weights instead of the quantized model. The NPU ran every node of the face detector.
+        options.add_provider_for_devices(devices, {"backend_path": onnxruntime_qnn.get_qnn_htp_path()})
+        return ort.InferenceSession(path, sess_options=options)
+    if devices:
+        providers = [p for p in providers if p != _QNN_EP] or ["CPUExecutionProvider"]
+    if _ARM64 and providers == ["CPUExecutionProvider"]:
+        if not _arm64_note_logged:
+            _arm64_note_logged = True
+            logger.info("64-bit ARM CPU: quantized models run without int8 fusion (ONNX Runtime's fused kernels "
+                        "give wrong face detections here).")
+        options.add_session_config_entry("session.disable_quant_qdq", "1")
+    return ort.InferenceSession(path, sess_options=options, providers=providers)
 
 
 @dataclass
@@ -17,15 +106,8 @@ class HardwareProfile:
     total_ram_gb: float
 
     def get_ort_providers(self) -> list:
-        providers = []
-        if self.has_npu:
-            providers.append('QNNExecutionProvider')
-            providers.append('NnapiExecutionProvider')
-        if self.has_gpu:
-            providers.append('CUDAExecutionProvider')
-            providers.append('DmlExecutionProvider') # DirectML for Windows GPUs
-        providers.append('CPUExecutionProvider')
-        return providers
+        available = available_ort_providers()
+        return [p for p in _PREFERRED_PROVIDERS if p in available] or ["CPUExecutionProvider"]
 
 
 class HardwareDetector:
@@ -36,28 +118,17 @@ class HardwareDetector:
 
     @staticmethod
     def _check_gpu() -> bool:
-        # Check for CUDA (NVIDIA)
-        if os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" or os.path.exists("/dev/nvidia0"):
-            return True
-        # Check for AMD/Intel GPUs on Windows via ONNX DirectML provider availability
-        try:
-            import onnxruntime as ort
-            providers = ort.get_available_providers()
-            if 'DmlExecutionProvider' in providers:
-                return True
-        except ImportError:
-            pass
-            
-        # Fallback to checking registry or OS specific indicators if needed
-        if platform.system() == "Windows":
-            return True # Windows almost always has a GPU (Intel/AMD/Nvidia) capable of DirectML
-            
-        return False
+        return bool(available_ort_providers() & {"CUDAExecutionProvider", "DmlExecutionProvider"})
 
     @staticmethod
     def _check_npu() -> bool:
-        # Check for Rubik Pi / QCS6490 NPU nodes
-        return os.path.exists("/dev/qce") or os.path.exists("/dev/kgsl-3d0")
+        # True with a QNN-enabled onnxruntime build (onnxruntime-qnn 1.x) or the onnxruntime-qnn >= 2.0 plugin.
+        return "QNNExecutionProvider" in available_ort_providers()
+
+    @staticmethod
+    def _is_embedded(system: str, machine: str) -> bool:
+        # Apple Silicon and Windows-on-ARM report arm64 too, but they are desktops.
+        return system == "Linux" and machine.lower() in ("aarch64", "armv7l", "arm64")
 
     _cached_profile: HardwareProfile = None
 
@@ -69,8 +140,7 @@ class HardwareDetector:
         system = platform.system()
         machine = platform.machine()
 
-        # Check if running on Rubik Pi or similar ARM embedded board
-        is_embedded = machine.lower() in ["aarch64", "armv7l", "arm64"]
+        is_embedded = cls._is_embedded(system, machine)
 
         ram_bytes = psutil.virtual_memory().total
         ram_gb = ram_bytes / (1024**3)

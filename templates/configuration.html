@@ -119,7 +119,7 @@
                     <div class="glass-card">
                         <div class="card-header">
                             <h3>Posture Thresholds</h3>
-                            <button type="button" class="reset-btn" onclick="resetSection(['neck_pitch_tolerance_degrees', 'shoulder_roll_tolerance_degrees', 'slouch_sensitivity', 'head_forward_threshold'])">Reset</button>
+                            <button type="button" class="reset-btn" onclick="resetSection(['neck_pitch_tolerance_degrees', 'shoulder_roll_tolerance_degrees', 'slouch_sensitivity'])">Reset</button>
                         </div>
                         <div class="control-group">
                             <div class="control-label">
@@ -166,10 +166,10 @@
                         </div>
                         <div class="control-group">
                             <div class="control-label">
-                                <span>Gaze Away Alert Time <span class="tooltip-icon" title="How long you need to look away to satisfy an ocular break.">i</span></span>
-                                <span class="val-display" id="val-gaze">20 sec</span>
+                                <span>Screen Time Before Eye Break <span class="tooltip-icon" title="Continuous screen time before an eye-break reminder.">i</span></span>
+                                <span class="val-display" id="val-gaze">20 min</span>
                             </div>
-                            <input type="range" id="screen_gaze_limit_seconds" min="5" max="60" step="1" oninput="updateDisplay(this, 'val-gaze', ' sec')">
+                            <input type="range" id="screen_gaze_limit_seconds" min="300" max="7200" step="300" oninput="updateDisplay(this, 'val-gaze', ' min', v => v/60)">
                         </div>
                         <div class="control-group">
                             <div class="control-label">
@@ -218,13 +218,7 @@
                     <div class="glass-card">
                         <div class="card-header">
                             <h3>Notifications</h3>
-                            <button type="button" class="reset-btn" onclick="resetSection(['enable_desktop_notifications', 'enable_sound_alerts', 'enable_popup_alerts', 'reminder_cooldown'])">Reset</button>
-                        </div>
-                        <div class="control-group">
-                            <div class="control-label">
-                                <span>Enable Desktop Notifications</span>
-                                <label class="switch"><input type="checkbox" id="enable_desktop_notifications" onchange="markDirty()"><span class="slider"></span></label>
-                            </div>
+                            <button type="button" class="reset-btn" onclick="resetSection(['enable_sound_alerts', 'reminder_cooldown'])">Reset</button>
                         </div>
                         <div class="control-group">
                             <div class="control-label">
@@ -248,62 +242,46 @@
                         </div>
                         <div style="margin-bottom: 1.5rem;">
                             <div style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.5rem;">Last calibrated:</div>
-                            <div style="font-size: 1.1rem; font-weight: 600; color: #f8fafc;" id="calib-timestamp">Today, 2:45 PM</div>
+                            <div style="font-size: 1.1rem; font-weight: 600; color: #f8fafc;" id="calib-timestamp">No user in view</div>
                         </div>
                         <div class="control-group">
                             <div class="control-label">Baseline posture:</div>
                             <div style="display: flex; gap: 1rem; margin-top: 0.5rem;">
                                 <div style="background: rgba(255,255,255,0.05); padding: 0.5rem 1rem; border-radius: 6px; flex-grow: 1; text-align: center;">
                                     <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Head</div>
-                                    <div style="color: #10b981; font-weight: bold; margin-top: 0.2rem;">✓</div>
+                                    <div id="calib-head" style="font-weight: bold; margin-top: 0.2rem;">–</div>
                                 </div>
                                 <div style="background: rgba(255,255,255,0.05); padding: 0.5rem 1rem; border-radius: 6px; flex-grow: 1; text-align: center;">
                                     <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Shoulders</div>
-                                    <div style="color: #10b981; font-weight: bold; margin-top: 0.2rem;">✓</div>
+                                    <div id="calib-shoulders" style="font-weight: bold; margin-top: 0.2rem;">–</div>
                                 </div>
                                 <div style="background: rgba(255,255,255,0.05); padding: 0.5rem 1rem; border-radius: 6px; flex-grow: 1; text-align: center;">
                                     <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Back</div>
-                                    <div style="color: #10b981; font-weight: bold; margin-top: 0.2rem;">✓</div>
+                                    <div id="calib-back" style="font-weight: bold; margin-top: 0.2rem;">–</div>
                                 </div>
                             </div>
                         </div>
                         <div class="control-group" style="margin-top: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
                             <div>
                                 <span style="color: #94a3b8; font-size: 0.9rem;">Status: </span>
-                                <span style="color: #10b981; font-weight: bold;">✓ Calibrated</span>
+                                <span id="calib-status" style="font-weight: bold; color: #94a3b8;">Unknown</span>
                             </div>
                             <button type="button" class="btn btn-primary" onclick="triggerCalibration()">Recalibrate</button>
                         </div>
                     </div>
                     
-                    <!-- Detection Sensitivity -->
+                    <!-- Detection -->
                     <div class="glass-card">
                         <div class="card-header">
-                            <h3>Detection Sensitivity</h3>
-                            <button type="button" class="reset-btn" onclick="resetSection(['confidence_threshold', 'tracking_stability', 'detection_fps', 'enable_pose_smoothing'])">Reset</button>
+                            <h3>Detection</h3>
+                            <button type="button" class="reset-btn" onclick="resetSection(['detection_fps'])">Reset</button>
                         </div>
                         <div class="control-group">
                             <div class="control-label">
-                                <span>Confidence Threshold <span class="tooltip-icon" title="Minimum confidence required to track your face.">i</span></span>
-                                <span class="val-display" id="val-conf">70%</span>
+                                <span>Maximum Detection Rate <span class="tooltip-icon" title="Upper bound on frames analysed per second; lower values save CPU and power.">i</span></span>
+                                <span class="val-display" id="val-fps">30 FPS</span>
                             </div>
-                            <input type="range" id="confidence_threshold" min="30" max="95" step="5" oninput="updateDisplay(this, 'val-conf', '%')">
-                        </div>
-                        <div class="control-group">
-                            <div class="control-label">
-                                <span>Tracking Stability</span>
-                            </div>
-                            <select id="tracking_stability" onchange="markDirty()">
-                                <option value="Fast">Fast (Responsive)</option>
-                                <option value="Normal">Normal</option>
-                                <option value="Smooth">Smooth (Less jitter)</option>
-                            </select>
-                        </div>
-                        <div class="control-group">
-                            <div class="control-label">
-                                <span>Enable Pose Smoothing</span>
-                                <label class="switch"><input type="checkbox" id="enable_pose_smoothing" onchange="markDirty()"><span class="slider"></span></label>
-                            </div>
+                            <input type="range" id="detection_fps" min="5" max="30" step="1" oninput="updateDisplay(this, 'val-fps', ' FPS')">
                         </div>
                     </div>
                     
@@ -325,6 +303,23 @@
     <script>
         let currentSettings = {};
         let isDirty = false;
+
+        async function api(url, { method = 'GET', json, body } = {}) {
+            const options = { method, headers: {} };
+            if (method !== 'GET') options.headers['X-DeskBot-Request'] = '1';
+            if (json !== undefined) {
+                options.headers['Content-Type'] = 'application/json';
+                options.body = JSON.stringify(json);
+            } else if (body !== undefined) {
+                options.body = body;
+            }
+            return fetch(url, options);
+        }
+
+        async function errorText(res) {
+            try { const data = await res.json(); return data.message || data.error || `Request failed (${res.status})`; }
+            catch (e) { return `Request failed (${res.status})`; }
+        }
         
         function updateDisplay(input, displayId, suffix, transform = v => v) {
             document.getElementById(displayId).innerText = transform(input.value) + suffix;
@@ -403,14 +398,12 @@
         async function saveSettings() {
             const payload = collectUI();
             try {
-                const res = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
+                const res = await api('/api/settings', { method: 'POST', json: payload });
                 if(res.ok) {
                     clearDirty();
                     showToast();
+                } else {
+                    alert(await errorText(res));
                 }
             } catch(e) {
                 console.error("Failed to save:", e);
@@ -419,15 +412,13 @@
         
         async function resetSection(keys) {
             try {
-                const res = await fetch('/api/settings/reset', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({keys})
-                });
+                const res = await api('/api/settings/reset', { method: 'POST', json: { keys } });
                 if(res.ok) {
                     const data = await res.json();
                     applyToUI(data.settings);
                     clearDirty();
+                } else {
+                    alert(await errorText(res));
                 }
             } catch(e) {
                 console.error("Failed to reset:", e);
@@ -438,31 +429,63 @@
             window.location.href = '/api/settings/export';
         }
         
-        function importSettings(event) {
+        async function importSettings(event) {
             const file = event.target.files[0];
             if(!file) return;
             const formData = new FormData();
             formData.append('file', file);
+            event.target.value = '';
             
-            fetch('/api/settings/import', {
-                method: 'POST',
-                body: formData
-            }).then(res => res.json()).then(data => {
-                if(data.status === 'success') {
-                    loadSettings();
-                    showToast("Import successful!");
-                }
-            });
+            const res = await api('/api/settings/import', { method: 'POST', body: formData });
+            if (res.ok) {
+                loadSettings();
+                showToast("Import successful!");
+            } else {
+                alert(await errorText(res));
+            }
         }
         
         async function triggerCalibration() {
             try {
-                const res = await fetch('/api/profile/recalibrate', { method: 'POST' });
+                const res = await api('/api/profile/recalibrate', { method: 'POST' });
                 if(res.ok) {
                     showToast("Calibration Started. Please sit straight.");
                 }
             } catch(e) {
                 console.error("Failed to trigger calibration:", e);
+            }
+        }
+
+        function setMark(id, ok) {
+            const node = document.getElementById(id);
+            node.textContent = ok ? '✓' : '✕';
+            node.style.color = ok ? '#10b981' : '#ef4444';
+        }
+
+        async function loadCalibration() {
+            try {
+                const targets = await (await api('/api/metrics_slice')).json();
+                const user = targets.find(t => t.is_primary && !t.name.startsWith('Unknown'));
+                const stamp = document.getElementById('calib-timestamp');
+                const status = document.getElementById('calib-status');
+                if (!user) {
+                    stamp.textContent = 'No registered user in view';
+                    status.textContent = 'Unknown';
+                    status.style.color = '#94a3b8';
+                    ['calib-head', 'calib-shoulders', 'calib-back'].forEach(id => { document.getElementById(id).textContent = '–'; });
+                    return;
+                }
+                const c = user.calibration || {};
+                stamp.textContent = c.calibrated_at
+                    ? `${user.name}: ${new Date(c.calibrated_at * 1000).toLocaleString()}`
+                    : `${user.name}: not calibrated this session`;
+                setMark('calib-head', c.head);
+                setMark('calib-shoulders', c.shoulders);
+                setMark('calib-back', c.back);
+                status.textContent = c.calibrated ? '✓ Calibrated' : 'Not calibrated';
+                status.style.color = c.calibrated ? '#10b981' : '#f59e0b';
+            } catch (e) {
+                console.error("Failed to load calibration state:", e);
             }
         }
         
@@ -484,7 +507,7 @@
                     data.available_cameras.forEach(cam => {
                         const opt = document.createElement('option');
                         opt.value = cam.index;
-                        opt.text = `[${cam.type}] ${cam.name}`;
+                        opt.text = `[${cam.type}] ${cam.name}` + (cam.status === 'Unverified' ? ' (unverified)' : '');
                         if (String(cam.index) === String(data.active_index)) {
                             opt.selected = true;
                             document.getElementById('camera-metadata').innerText = `Active | Path: ${cam.path}`;
@@ -505,14 +528,12 @@
             if (idx === "") return;
             
             try {
-                const res = await fetch('/api/cameras/select', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ index: parseInt(idx) })
-                });
+                const res = await api('/api/cameras/select', { method: 'POST', json: { index: parseInt(idx) } });
                 if (res.ok) {
-                    showToast("Camera changed successfully!");
-                    setTimeout(fetchCameras, 1500);
+                    showToast("Switching camera...");
+                    setTimeout(fetchCameras, 3000);
+                } else {
+                    alert(await errorText(res));
                 }
             } catch (e) {
                 console.error("Camera change failed", e);
@@ -522,6 +543,8 @@
         window.onload = () => {
             loadSettings();
             fetchCameras();
+            loadCalibration();
+            setInterval(loadCalibration, 5000);
         };
     </script>
 </body>

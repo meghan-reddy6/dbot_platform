@@ -81,6 +81,12 @@ class ModelManager:
             if os.path.exists(target_path):
                 # Validate Checksum if provided
                 if expected_sha256 and not self._validate_checksum(target_path, expected_sha256):
+                    if not url:
+                        # No way to fetch it again, so keep the file and let the operator replace it.
+                        logger.error(f"[MODEL] Checksum mismatch for {filename} and no download URL. Replace models/{filename}.")
+                        if required:
+                            sys.exit(1)
+                        continue
                     logger.warning(f"[MODEL] Checksum mismatch for {filename}. Deleting and re-downloading.")
                     os.remove(target_path)
                 else:

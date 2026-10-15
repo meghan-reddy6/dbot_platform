@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DeskBot V3 Pro Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{{ url_for('static', filename='vendor/chart.umd.js') }}"></script>
     <style>
         body { margin: 0; font-family: 'Inter', 'Segoe UI', sans-serif; background: #0b0f19; color: #fff; overflow-x: hidden; }
         .bg-blobs { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; background: radial-gradient(circle at 15% 50%, rgba(76, 29, 149, 0.15), transparent 35%), radial-gradient(circle at 85% 30%, rgba(14, 165, 233, 0.15), transparent 35%); }
@@ -506,18 +506,45 @@ if (glow === 'red') label.style.color = '#ef4444';
             if (glow === 'gray') label.style.color = '#94a3b8';
         }
 
-        async function getProfileConfig(name) {
-            try {
-                const res = await fetch('/api/profiles');
-                const profiles = await res.json();
-                return profiles[name] || {};
-            } catch { return {}; }
+        const API_HEADERS = { 'X-DeskBot-Request': '1' };
+
+        async function api(url, { method = 'GET', json } = {}) {
+            const options = { method, headers: {} };
+            if (method !== 'GET') Object.assign(options.headers, API_HEADERS);
+            if (json !== undefined) {
+                options.headers['Content-Type'] = 'application/json';
+                options.body = JSON.stringify(json);
+            }
+            return fetch(url, options);
         }
+
+        async function reportError(res) {
+            if (res.ok) return true;
+            let message = `Request failed (${res.status})`;
+            try { const data = await res.json(); message = data.error || data.message || message; } catch (e) {}
+            alert(message);
+            return false;
+        }
+
+        function el(tag, props = {}, children = []) {
+            const node = document.createElement(tag);
+            Object.assign(node, props);
+            children.forEach(child => node.append(child));
+            return node;
+        }
+
+        function domKey(id) {
+            return String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+        }
+
+        let primaryUserName = null;
 
         async function refreshLiveTelemetry() {
             try {
-                const res = await fetch('/api/metrics_slice');
+                const res = await api('/api/metrics_slice');
                 const targets = await res.json();
+                const primary = targets.find(t => t.is_primary && !t.name.startsWith('Unknown'));
+                primaryUserName = primary ? primary.name : null;
                 
                 const container = document.getElementById('targets-container');
                 
@@ -533,7 +560,8 @@ if (glow === 'red') label.style.color = '#ef4444';
                 const currentTrackIds = new Set();
                 
                 for (const t of targets) {
-                    currentTrackIds.add(String(t.id));
+                    const key = domKey(t.id);
+                    currentTrackIds.add(key);
                     
                     let sittingTime = t.sitting_time !== undefined ? Math.round(t.sitting_time) : 0;
                     let standingTime = t.standing_time !== undefined ? Math.round(t.standing_time) : 0;
@@ -543,108 +571,108 @@ if (glow === 'red') label.style.color = '#ef4444';
                     let sitPct = Math.min(100, (sittingTime / sessionLimit) * 100);
                     let standPct = Math.min(100, (standingTime / standRequirement) * 100);
                     
-                    let card = document.getElementById(`target-card-${t.id}`);
+                    let card = document.getElementById(`target-card-${key}`);
                     
                     if (!card) {
                         card = document.createElement('div');
-                        card.id = `target-card-${t.id}`;
+                        card.id = `target-card-${key}`;
                         card.className = "glass-card";
                         
-                        const profileConfig = await getProfileConfig(t.name);
-                        const isUnknown = t.name.startsWith("Unknown");
-                        const uiName = isUnknown ? `Unregistered #${t.id}` : t.name;
-                        
+                        // Only sanitized ids go into this markup; names are set with textContent below.
                         card.innerHTML = `
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem;">
                                 <div style="font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Live Status Matrix</div>
                                 <div style="text-align: right; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 20px;">
                                     <span style="font-size: 0.85rem; color: #94a3b8; margin-right: 8px;">ACTIVE WORKSPACE USER:</span>
-                                    <span id="name-${t.id}" style="font-size: 1rem; color: #fff; font-weight: 500;">${uiName}</span>
+                                    <span id="name-${key}" style="font-size: 1rem; color: #fff; font-weight: 500;"></span>
                                 </div>
                             </div>
                             
                             <!-- PERSISTENT DASHBOARD MATRIX -->
-                            <div id="matrix-container-${t.id}" style="margin-bottom: 2rem;">
-                                ${buildDashboardDOM(t.id)}
+                            <div id="matrix-container-${key}" style="margin-bottom: 2rem;">
+                                ${buildDashboardDOM(key)}
                             </div>
                             
                             <div style="margin-top: 1.5rem;">
                                 <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
                                     <span>Continuous Sitting Limit Cap</span>
-                                    <span id="sit-text-${t.id}"></span>
+                                    <span id="sit-text-${key}"></span>
                                 </div>
                                 <div class="progress-container">
-                                    <div id="sit-bar-${t.id}" class="progress-bar"></div>
+                                    <div id="sit-bar-${key}" class="progress-bar"></div>
                                 </div>
                             </div>
                             
                             <div style="margin-top: 1rem;">
                                 <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
                                     <span>Mandatory Stand Duration Requirement</span>
-                                    <span id="stand-text-${t.id}"></span>
+                                    <span id="stand-text-${key}"></span>
                                 </div>
                                 <div class="progress-container">
-                                    <div id="stand-bar-${t.id}" class="progress-bar success"></div>
+                                    <div id="stand-bar-${key}" class="progress-bar success"></div>
                                 </div>
                             </div>
                             
                             <div style="margin-top: 1rem; margin-bottom: 1rem;">
                                 <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.4rem; font-weight: 500; color: #cbd5e1;">
                                     <span>Continuous Screen Gaze Limit</span>
-                                    <span id="gaze-text-${t.id}"></span>
+                                    <span id="gaze-text-${key}"></span>
                                 </div>
                                 <div style="width: 100%; background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.02);">
-                                    <div id="gaze-bar-${t.id}" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); transition: width 0.5s ease-out;"></div>
+                                    <div id="gaze-bar-${key}" style="height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); transition: width 0.5s ease-out;"></div>
                                 </div>
                             </div>
                             
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;">
                                 <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                     <div class="metric-label">Neck Pitch</div>
-                                    <div id="pitch-val-${t.id}" class="metric-val"></div>
+                                    <div id="pitch-val-${key}" class="metric-val"></div>
                                 </div>
                                 <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                     <div class="metric-label">Spine Lateral</div>
-                                    <div id="spine-val-${t.id}" class="metric-val"></div>
+                                    <div id="spine-val-${key}" class="metric-val"></div>
                                 </div>
                                 <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
                                     <div class="metric-label">Shoulder Roll</div>
-                                    <div id="shoulder-val-${t.id}" class="metric-val"></div>
+                                    <div id="shoulder-val-${key}" class="metric-val"></div>
                                 </div>
                                 <div class="metric-card" style="background: rgba(15,23,42,0.4); padding: 1.2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03);">
                                     <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Ocular Break Accumulator</div>
-                                    <div id="ocular-val-${t.id}" style="font-size: 1.8rem; font-weight: 700; color: #fff; margin-top: 0.5rem;"></div>
+                                    <div id="ocular-val-${key}" style="font-size: 1.8rem; font-weight: 700; color: #fff; margin-top: 0.5rem;"></div>
                                 </div>
                             </div>
                         `;
                         container.appendChild(card);
                     }
                     
+                    // The identity of a track can change (Unknown -> verified), so refresh the name every poll.
+                    document.getElementById(`name-${key}`).textContent = t.name.startsWith("Unknown") ? `Unregistered #${t.id}` : t.name;
+                    
                     // DEBOUNCED UI DOM UPDATES (No HTML regeneration)
                     if (t.dashboard_indicators) {
-                        updateStateDebounced(t.id, 'tracking', t.dashboard_indicators.tracking, t.dashboard_indicators);
-                        updateStateDebounced(t.id, 'posture', t.dashboard_indicators.posture, t.dashboard_indicators);
-                        updateStateDebounced(t.id, 'eyes', t.dashboard_indicators.eyes, t.dashboard_indicators);
-                        updateStateDebounced(t.id, 'sitting', t.dashboard_indicators.sitting, t.dashboard_indicators, sitPct);
-                        updateStateDebounced(t.id, 'movement', t.dashboard_indicators.movement, t.dashboard_indicators, standPct);
+                        updateStateDebounced(key, 'tracking', t.dashboard_indicators.tracking, t.dashboard_indicators);
+                        updateStateDebounced(key, 'posture', t.dashboard_indicators.posture, t.dashboard_indicators);
+                        updateStateDebounced(key, 'eyes', t.dashboard_indicators.eyes, t.dashboard_indicators);
+                        updateStateDebounced(key, 'sitting', t.dashboard_indicators.sitting, t.dashboard_indicators, sitPct);
+                        updateStateDebounced(key, 'movement', t.dashboard_indicators.movement, t.dashboard_indicators, standPct);
                     }
                     
-                    document.getElementById(`sit-text-${t.id}`).textContent = `${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m`;
-                    const sitBar = document.getElementById(`sit-bar-${t.id}`);
+                    document.getElementById(`sit-text-${key}`).textContent = `${Math.round(sittingTime/60)}m / ${Math.round(sessionLimit/60)}m`;
+                    const sitBar = document.getElementById(`sit-bar-${key}`);
                     sitBar.style.width = `${sitPct}%`;
                     sitBar.className = `progress-bar ${sitPct > 90 ? 'danger' : ''}`;
                     
-                    document.getElementById(`stand-text-${t.id}`).textContent = `${standingTime}s / ${standRequirement}s`;
-                    document.getElementById(`stand-bar-${t.id}`).style.width = `${standPct}%`;
+                    document.getElementById(`stand-text-${key}`).textContent = `${standingTime}s / ${standRequirement}s`;
+                    document.getElementById(`stand-bar-${key}`).style.width = `${standPct}%`;
                     
-                    document.getElementById(`pitch-val-${t.id}`).textContent = `${headPitch}°`;
-                    document.getElementById(`spine-val-${t.id}`).textContent = `${Math.round(t.spine_alignment || 0)}°`;
-                    document.getElementById(`shoulder-val-${t.id}`).textContent = `${Math.round(t.shoulder_alignment || 0)}°`;
+                    document.getElementById(`pitch-val-${key}`).textContent = `${headPitch}°`;
+                    document.getElementById(`spine-val-${key}`).textContent = `${Math.round(t.spine_alignment || 0)}°`;
+                    document.getElementById(`shoulder-val-${key}`).textContent = `${Math.round(t.shoulder_alignment || 0)}°`;
                     
                     if(t.screen_gaze_current !== undefined) {
-                        document.getElementById(`gaze-text-${t.id}`).textContent = `${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m`;
-                        document.getElementById(`gaze-bar-${t.id}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
-                        document.getElementById(`ocular-val-${t.id}`).textContent = `${Math.round(t.ocular_break_current || 0)}s / ${Math.round(t.ocular_break_max || 0)}s`;
+                        document.getElementById(`gaze-text-${key}`).textContent = `${Math.round(t.screen_gaze_current / 60)}m / ${Math.round(t.screen_gaze_max / 60)}m`;
+                        document.getElementById(`gaze-bar-${key}`).style.width = `${(t.screen_gaze_current / Math.max(1, t.screen_gaze_max)) * 100}%`;
+                        document.getElementById(`ocular-val-${key}`).textContent = `${Math.round(t.ocular_break_current || 0)}s / ${Math.round(t.ocular_break_max || 0)}s`;
                     }
                 }
                 
@@ -663,157 +691,165 @@ if (glow === 'red') label.style.color = '#ef4444';
             }
         }
 
-        async function pollProfiles() {
+        const PROFILE_SLIDERS = [
+            { field: 'slouch_sensitivity', label: '3D Posture Tolerance Edge', min: 5, max: 45, step: 1, scale: 1, unit: '°' },
+            { field: 'session_limit', label: 'Continuous Sitting Cap (Minutes)', min: 1, max: 120, step: 1, scale: 60, unit: 'm' },
+            { field: 'stand_requirement', label: 'Required Stand Duration (Minutes)', min: 1, max: 15, step: 1, scale: 60, unit: 'm' },
+            { field: 'screen_gaze_limit', label: 'Screen Gaze Limit (Minutes)', min: 1, max: 120, step: 1, scale: 60, unit: 'm' },
+            { field: 'ocular_break_duration', label: 'Ocular Break Duration (Seconds)', min: 5, max: 120, step: 5, scale: 1, unit: 's' },
+        ];
+        const CELL_STYLE = 'padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);';
+        const HEAD_STYLE = 'padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;';
+        let lastProfilesJson = null;
+
+        async function pollProfiles(force = false) {
             try {
-                const res = await fetch('/api/profiles');
+                const res = await api('/api/profiles');
                 const profiles = await res.json();
-                
                 const container = document.getElementById('profiles-container');
-                let html = `<div style="overflow-x: auto; padding-bottom: 15px; width: 100%;">
-                    <table style="min-width: 1100px; width: 100%; border-collapse: collapse; text-align: left;">
-                    <tr>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Name</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">3D Posture Tolerance Edge</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Continuous Sitting Cap (Minutes)</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Required Stand Duration (Minutes)</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Screen Gaze Limit (Minutes)</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Ocular Break Duration (Minutes)</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">History Export</th>
-                        <th style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; text-transform: uppercase; color: #94a3b8;">Actions</th>
-                    </tr>`;
-                
-                Object.keys(profiles).forEach(username => {
-                    const p = profiles[username];
-                    let gazeLimitMin = Math.round(p.screen_gaze_limit / 60); 
-                    let sitLimitMin = Math.round(p.session_limit / 60);
-                    let standReqMin = Math.max(1, Math.round(p.stand_requirement / 60));
-                    let breakDurationMin = Math.max(1, Math.round(p.ocular_break_duration / 60));
-                    html += `
-                        <tr>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); font-weight: 500;">${username}</td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="5" max="45" value="${p.slouch_sensitivity}" onchange="updateProfile('${username}', this.value, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${p.slouch_sensitivity}°</span></td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="120" step="1" value="${sitLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, (this.value * 60), ${p.stand_requirement}, ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${sitLimitMin}m</span></td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="15" step="1" value="${standReqMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, (this.value * 60), ${p.screen_gaze_limit}, ${p.ocular_break_duration})"> <span>${standReqMin}m</span></td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="120" step="1" value="${gazeLimitMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, (this.value * 60), ${p.ocular_break_duration})"> <span>${gazeLimitMin}m</span></td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><input type="range" min="1" max="15" step="1" value="${breakDurationMin}" onchange="updateProfile('${username}', ${p.slouch_sensitivity}, ${p.session_limit}, ${p.stand_requirement}, ${p.screen_gaze_limit}, (this.value * 60))"> <span>${breakDurationMin}m</span></td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                                <a href="/api/export/csv/${username}" target="_blank" style="color: #10b981; text-decoration: none; font-size: 0.85rem; margin-right: 8px;">CSV</a>
-                                <a href="/api/export/json/${username}" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.85rem;">JSON</a>
-                            </td>
-                            <td style="padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.05);"><button class="danger" onclick="deleteProfile('${username}')">Delete Profile</button></td>
-                        </tr>
-                    `;
+                const profilesJson = JSON.stringify(profiles);
+                // Rebuilding while a slider is being dragged would throw the user's change away.
+                if (!force && (profilesJson === lastProfilesJson || container.contains(document.activeElement))) return;
+                lastProfilesJson = profilesJson;
+
+                const table = el('table', { style: 'min-width: 1100px; width: 100%; border-collapse: collapse; text-align: left;' });
+                const header = el('tr');
+                // Actions sit next to the name so they stay on screen when the wide table scrolls sideways.
+                ['Name', 'Actions', ...PROFILE_SLIDERS.map(s => s.label), 'History Export'].forEach(text =>
+                    header.append(el('th', { style: HEAD_STYLE, textContent: text })));
+                table.append(header);
+
+                Object.entries(profiles).forEach(([name, p]) => {
+                    const row = el('tr');
+                    row.append(el('td', { style: CELL_STYLE + ' font-weight: 500;', textContent: name }));
+                    const remove = el('button', { className: 'danger', textContent: 'Delete Profile' });
+                    remove.addEventListener('click', () => deleteProfile(name));
+                    row.append(el('td', { style: CELL_STYLE }, [remove]));
+                    PROFILE_SLIDERS.forEach(spec => {
+                        const shown = Math.min(spec.max, Math.max(spec.min, Math.round(p[spec.field] / spec.scale)));
+                        const readout = el('span', { textContent: `${shown}${spec.unit}` });
+                        const slider = el('input', { type: 'range', min: spec.min, max: spec.max, step: spec.step, value: shown });
+                        slider.addEventListener('input', () => { readout.textContent = `${slider.value}${spec.unit}`; });
+                        slider.addEventListener('change', () => {
+                            slider.blur();
+                            updateProfile(name, { [spec.field]: Number(slider.value) * spec.scale });
+                        });
+                        row.append(el('td', { style: CELL_STYLE }, [slider, ' ', readout]));
+                    });
+                    row.append(el('td', { style: CELL_STYLE }, [
+                        el('a', { href: '/api/export/csv/' + encodeURIComponent(name), target: '_blank', textContent: 'CSV',
+                                  style: 'color: #10b981; text-decoration: none; font-size: 0.85rem; margin-right: 8px;' }),
+                        el('a', { href: '/api/export/json/' + encodeURIComponent(name), target: '_blank', textContent: 'JSON',
+                                  style: 'color: #38bdf8; text-decoration: none; font-size: 0.85rem;' }),
+                    ]));
+                    table.append(row);
                 });
-                html += '</table></div>';
-                container.innerHTML = html;
+                container.replaceChildren(el('div', { style: 'overflow-x: auto; padding-bottom: 15px; width: 100%;' }, [table]));
             } catch (e) {
                 console.error("Profile sync error", e);
             }
         }
 
-        function triggerManualRecalibrate() {
+        async function triggerManualRecalibrate() {
             try {
-                fetch('/api/profile/recalibrate', { method: 'POST' });
+                await reportError(await api('/api/profile/recalibrate', { method: 'POST' }));
             } catch (e) {
                 console.error("Recalibration trigger failed", e);
             }
         }
         
-        function triggerSessionRestart() {
+        async function triggerSessionRestart() {
             try {
-                fetch('/api/profile/restart_session', { method: 'POST' });
+                await reportError(await api('/api/profile/restart_session', { method: 'POST' }));
             } catch (e) {
                 console.error("Session restart failed", e);
             }
         }
 
-        function createProfile() {
-            const name = document.getElementById('new-profile-name').value;
+        async function createProfile() {
+            const input = document.getElementById('new-profile-name');
+            const name = input.value.trim();
             if (!name) return alert("Enter a valid profile name.");
-            fetch('/api/profile/create', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name })
-            }).then(res => res.json()).then(data => {
-                if (data.error) alert(data.error);
-                document.getElementById('new-profile-name').value = '';
-                pollProfiles();
-                refreshLiveTelemetry();
-            }).catch(e => console.error(e));
+            try {
+                if (await reportError(await api('/api/profile/create', { method: 'POST', json: { name } }))) {
+                    input.value = '';
+                }
+            } catch (e) {
+                console.error(e);
+            }
+            pollProfiles(true);
+            refreshLiveTelemetry();
         }
 
-        async function updateProfile(name, slouch_sens, limit, stand_req, screen_limit, break_duration) {
-            await fetch('/api/profile/update', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ 
-                    name, 
-                    slouch_sensitivity: parseFloat(slouch_sens), 
-                    session_limit: parseInt(limit),
-                    stand_requirement: parseInt(stand_req),
-                    screen_gaze_limit: parseInt(screen_limit),
-                    ocular_break_duration: parseInt(break_duration)
-                })
-            });
-            pollProfiles();
+        async function updateProfile(name, changes) {
+            try {
+                await reportError(await api('/api/profile/update', { method: 'POST', json: { name, ...changes } }));
+            } catch (e) {
+                console.error("Profile update failed", e);
+            }
+            pollProfiles(true);
             refreshLiveTelemetry();
         }
 
         async function deleteProfile(name) {
-            if(!confirm("Are you sure you want to permanently delete profile '" + name + "'?")) return;
-            await fetch('/api/profile/delete', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name })
-            });
-            pollProfiles();
+            if (!confirm(`Permanently delete profile '${name}' and its stored history?`)) return;
+            try {
+                await reportError(await api('/api/profile/delete', { method: 'POST', json: { name } }));
+            } catch (e) {
+                console.error("Profile delete failed", e);
+            }
+            pollProfiles(true);
             refreshLiveTelemetry();
+        }
+
+        function diagRow(label, value, color = '#fff', last = false) {
+            const style = 'display: flex; justify-content: space-between;' +
+                (last ? '' : ' border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;');
+            return el('div', { style }, [
+                el('span', { textContent: label }),
+                el('strong', { textContent: value, style: `color: ${color};` }),
+            ]);
         }
 
         async function pollSystemDiagnostics() {
             try {
-                const res = await fetch('/api/system/health');
+                const res = await api('/api/system/health');
                 const health = await res.json();
-                
-                const diagHtml = `
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>System Architecture</span> <strong style="color: #38bdf8;">${health.platform} ${health.arch}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Edge NPU Node</span> <strong style="color: ${health.is_embedded ? '#10b981' : '#f59e0b'};">${health.is_embedded ? 'TRUE' : 'FALSE'}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Hardware Accl. (GPU/NPU)</span> <strong style="color: ${(health.has_gpu || health.has_npu) ? '#10b981' : '#f59e0b'};">${(health.has_gpu || health.has_npu) ? 'ACTIVE' : 'FALLBACK'}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Total Available RAM</span> <strong style="color: #fff;">${health.ram_gb.toFixed(2)} GB</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Live Tracked Sessions</span> <strong style="color: #38bdf8;">${health.tracked_targets}</strong>
-                    </div>
-                    
-                    <div style="margin-top: 10px; font-weight: 600; color: #fff;">Camera Telemetry</div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Capture Thread FPS</span> <strong style="color: #10b981;">${health.camera_metrics?.fps_capture?.toFixed(1) || '0.0'}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Resolution</span> <strong style="color: #fff;">${health.camera_metrics?.resolution || 'Unknown'}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Active Backend</span> <strong style="color: #38bdf8;">${health.camera_metrics?.active_backend || 'None'}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
-                        <span>Frame Drops</span> <strong style="color: ${health.camera_metrics?.drops > 0 ? '#ef4444' : '#10b981'};">${health.camera_metrics?.drops || 0}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between;">
-                        <span>Reconnects</span> <strong style="color: ${health.camera_metrics?.reconnects > 0 ? '#f59e0b' : '#10b981'};">${health.camera_metrics?.reconnects || 0}</strong>
-                    </div>
-                `;
-                document.getElementById('diagnostics-container').innerHTML = diagHtml;
+                const cam = health.camera_metrics || {};
+                const pipe = health.pipeline || {};
+                const worker = health.biometric_worker || {};
+                const good = '#10b981', warn = '#f59e0b', bad = '#ef4444', info = '#38bdf8';
+
+                const rows = [diagRow('Status', health.status === 'healthy' ? 'HEALTHY' : 'DEGRADED', health.status === 'healthy' ? good : bad)];
+                (health.reasons || []).forEach(reason =>
+                    rows.push(el('div', { textContent: '• ' + reason, style: `color: ${warn}; font-size: 0.85rem;` })));
+                rows.push(
+                    diagRow('System Architecture', `${health.platform} ${health.arch}`, info),
+                    diagRow('Embedded Board', health.is_embedded ? 'YES' : 'NO'),
+                    diagRow('Qualcomm NPU (QNN)', health.has_npu ? 'AVAILABLE' : 'NOT DETECTED', health.has_npu ? good : undefined),
+                    diagRow('GPU (CUDA / DirectML)', health.has_gpu ? 'AVAILABLE' : 'NOT AVAILABLE', health.has_gpu ? good : undefined),
+                    diagRow('Pose Inference Provider', (health.pose_providers || [])[0] || 'n/a', info),
+                    diagRow('Total Available RAM', `${Number(health.ram_gb || 0).toFixed(2)} GB`),
+                    diagRow('Live Tracked Sessions', String(health.tracked_targets), info),
+                    diagRow('Face Recognition Worker',
+                        worker.alive === undefined ? 'n/a' : (worker.alive ? `RUNNING (restarts: ${worker.restarts})` : 'DOWN'),
+                        worker.alive === false ? bad : good),
+                    el('div', { textContent: 'Camera Telemetry', style: 'margin-top: 10px; font-weight: 600; color: #fff;' }),
+                    diagRow('Camera State', String(cam.state || 'unknown').toUpperCase(), cam.state === 'streaming' ? good : warn),
+                    diagRow('Capture Thread FPS', Number(cam.fps_capture || 0).toFixed(1), good),
+                    diagRow('Resolution', cam.resolution || 'Unknown'),
+                    diagRow('Active Backend', cam.active_backend || 'None', info),
+                    // Only the newest camera frame is processed, so older ones are skipped by design.
+                    diagRow('Frames Skipped', String(cam.drops || 0)),
+                    diagRow('Reconnects', String(cam.reconnects || 0), cam.reconnects > 0 ? warn : good),
+                    diagRow('Frames Processed', String(pipe.frames_processed || 0)),
+                    diagRow('Inference Errors', String(pipe.errors || 0), pipe.errors > 0 ? warn : good, true),
+                );
+                document.getElementById('diagnostics-container').replaceChildren(...rows);
                 
                 if (health.last_system_message) {
                     const msgEl = document.getElementById('system-message-text');
-                    if (msgEl) msgEl.innerText = health.last_system_message;
+                    if (msgEl) msgEl.textContent = health.last_system_message;
                 }
             } catch (e) {
                 console.error("System diagnostics error", e);
@@ -823,20 +859,10 @@ if (glow === 'red') label.style.color = '#ef4444';
         let analyticsChart = null;
 
         async function pollHistoricalAnalytics() {
-            // Pick the first tracked target from live telemetry as primary user to chart
-            const container = document.getElementById('targets-container');
-            if (!container || container.children.length === 0 || container.innerHTML.includes('offline')) return;
-            
-            // Hacky extraction of primary user name
-            let primaryUser = null;
-            const nameEl = container.querySelector('[id^="name-"]');
-            if (nameEl && nameEl.textContent) {
-                primaryUser = nameEl.textContent;
-            }
-            if (!primaryUser || primaryUser === "Unknown") return;
+            if (!primaryUserName) return;
 
             try {
-                const res = await fetch(`/api/history/${primaryUser}`);
+                const res = await api('/api/history/' + encodeURIComponent(primaryUserName));
                 let historyData = await res.json();
                 
                 // Reverse to show chronological order
@@ -893,18 +919,23 @@ if (glow === 'red') label.style.color = '#ef4444';
             }
         }
 
-        setInterval(refreshLiveTelemetry, 1000);
-        window.onload = () => {
-            setInterval(refreshLiveTelemetry, 500);
-            setInterval(pollProfiles, 2000);
-            setInterval(pollSystemDiagnostics, 5000);
-            setInterval(pollHistoricalAnalytics, 10000);
-            
-            refreshLiveTelemetry();
-            pollProfiles();
-            pollSystemDiagnostics();
-            pollHistoricalAnalytics();
-        };
+        function every(ms, task) {
+            let busy = false;
+            const run = async () => {
+                if (busy) return;  // never stack requests behind a slow server
+                busy = true;
+                try { await task(); } finally { busy = false; }
+            };
+            run();
+            setInterval(run, ms);
+        }
+
+        window.addEventListener('load', () => {
+            every(500, refreshLiveTelemetry);
+            every(2000, pollProfiles);
+            every(5000, pollSystemDiagnostics);
+            every(10000, pollHistoricalAnalytics);
+        });
     </script>
         </main>
     </div>
